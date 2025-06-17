@@ -1,9 +1,23 @@
+# Flask web framework
 flask
-pytesseract
+
+# OpenAI client library
+openai
+
+# Python imaging
 pillow
+
+# Optical character recognition
 easyocr
+
+# Environment variable loading
+python-dotenv
+
+# HTTP requests and screenshot utilities
 requests
 mss
+
+# Text-to-speech and UI
 pyttsx3
 tkinter
 # keyboard

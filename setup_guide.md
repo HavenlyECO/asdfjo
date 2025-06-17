@@ -4,10 +4,7 @@
 
 1. **Prerequisites**
    - Python 3.8+
-   - Install Tesseract OCR:
-     - **Ubuntu**: `sudo apt-get install tesseract-ocr`
-     - **Windows**: [Download here](https://github.com/tesseract-ocr/tesseract)
-   - (Optional) Set up [EasyOCR](https://github.com/JaidedAI/EasyOCR) for better OCR.
+   - Install [EasyOCR](https://github.com/JaidedAI/EasyOCR) requirements if using GPU acceleration (optional).
 
 2. **Install Python dependencies:**
    ```
@@ -15,9 +12,11 @@
    ```
 
 3. **Configure Server**
-   - Edit `assistant_server.py`:
-     - Set `API_KEY`
-     - Set `ALLOWED_IPS`
+   - Create a `.env` file in the project root with the following variables:
+     - `POKER_ASSISTANT_API_KEY`
+     - `POKER_ASSISTANT_ALLOWED_IPS`
+     - `POKER_ASSISTANT_ID_1` (and additional IDs as needed)
+     - `OPENAI_API_KEY`
    - Place your `gto_chart.json` in the same directory.
 
 4. **Run the Server**
