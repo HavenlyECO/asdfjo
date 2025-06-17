@@ -69,69 +69,79 @@ class AssistantManager:
                     break
 
     def select_assistant(self, game_state: Dict, tournament_mode: bool) -> int:
-        """Select the appropriate assistant based on game state."""
+        """Select the appropriate assistant based on the updated assistant architecture."""
         street = game_state.get("street", "").lower()
         action = game_state.get("action", "").lower()
+        position = game_state.get("position", "").lower()
 
-        # ICM Tournament logic takes priority if in tournament mode
-        if tournament_mode:
-            return 10  # Tournament ICM Assistant
+        # ASSISTANT_1: Preflop Position Assistant
+        if street == "preflop" and "3bet" not in action and "3-bet" not in action:
+            return 1
 
-        # Check for preflop scenarios
-        if street == "preflop":
-            if "3bet" in action or "3-bet" in action:
-                return 3  # 3-Bet Situations Assistant
-            return 1  # Preflop Position Strategy Assistant
+        # ASSISTANT_2: Stack-Based ICM Assistant
+        if tournament_mode or game_state.get("stack_btn", 100) < 20 or game_state.get("stack_bb", 100) < 20:
+            return 2
 
-        # Check for stack-based scenarios
-        stack_btn = game_state.get("stack_btn", 0)
-        stack_bb = game_state.get("stack_bb", 0)
-        if stack_btn < 20 or stack_bb < 20 or stack_btn > 100 or stack_bb > 100:
-            return 2  # Stack vs Stack Matchups Assistant
+        # ASSISTANT_3: Villain Exploit Assistant
+        if any(key in game_state for key in ["vpip", "pfr", "3bet_freq", "fold_to_3bet", "aggression_factor"]):
+            return 3
 
-        # Check for postflop scenarios
-        if street in ["turn", "river"]:
-            return 4  # Bluff Catching Postflop Assistant
+        # ASSISTANT_4: Board Texture Assistant
+        if street in ["flop", "turn", "river"] and game_state.get("board", ""):
+            return 4
 
-        # Check for polarized ranges
-        if "check-raise" in action or "all-in" in action:
-            return 7  # Polarization Assistant
+        # ASSISTANT_5: Pot Odds Assistant
+        if game_state.get("pot", 0) > 0 and game_state.get("bet_to_call", 0) > 0:
+            return 5
 
-        # Check for heads-up scenarios
-        player_count = game_state.get("player_count", 0)
-        if player_count == 2:
-            return 9  # Heads-Up Assistant
+        # ASSISTANT_6: Future Street Pressure Assistant
+        if street in ["flop", "turn"] and game_state.get("pot", 0) / max(game_state.get("stack_btn", 1),
+                                                                         game_state.get("stack_bb", 1)) > 0.3:
+            return 6
 
-        # Check for SPR-based decisions (stack-to-pot ratio) in postflop
-        if street in ["flop", "turn", "river"] and game_state.get("pot", 0) > 0:
-            return 8  # SPR/Depth Postflop Assistant
+        # ASSISTANT_7: Bluff Catcher Evaluator
+        if street == "river" and "check" in action and "raise" in action:
+            return 7
 
-        # Default to GTO Assistant
-        return 6
+        # ASSISTANT_8: EV Delta Comparator Assistant
+        if "expected_value" in game_state or "ev_" in str(game_state):
+            return 8
+
+        # ASSISTANT_9: Meta-Image Shift Assistant
+        if "image" in game_state or "table_image" in game_state or "history" in game_state:
+            return 9
+
+        # ASSISTANT_10: Overbet Detection Assistant
+        if street in ["turn", "river"] and ("bet" in action.lower() and
+            game_state.get("bet_size", 0) > game_state.get("pot", 1) * 0.8):
+            return 10
+
+        # Default to EV Delta Comparator if no clear match
+        return 8
 
     def format_prompt(self, game_state: Dict) -> str:
-        """Format game state into natural language prompt."""
-        street = game_state.get("street", "unknown street")
+        """Format game state into natural language prompt according to required format."""
+        street = game_state.get("street", "unknown street").capitalize()
         position = game_state.get("position", "unknown position")
         stack_btn = game_state.get("stack_btn", "unknown")
         stack_bb = game_state.get("stack_bb", "unknown")
         pot = game_state.get("pot", "unknown")
-        action = game_state.get("action", "unknown")
+        action = game_state.get("action", "")
 
-        prompt = f"{street.capitalize()}. You are on the {position} with {stack_btn}BB. "
+        prompt = f"{street}. You are in the {position} with {stack_btn}BB. "
 
         if "bb" in position.lower():
-            prompt += f"The button has {stack_btn}BB. "
+            prompt += f"The button has {stack_btn}BB"
         else:
-            prompt += f"The big blind has {stack_bb}BB. "
+            prompt += f"The big blind has {stack_bb}BB"
 
-        if action != "unknown":
-            prompt += f"{action}. "
+        if action:
+            prompt += f" and has {action}"
 
-        prompt += f"Pot is {pot}BB. What is the optimal move?"
+        prompt += f". The pot is {pot}BB. What's the optimal decision?"
 
         # Add the required ending
-        prompt += "\n\nRespond with only one recommendation: FOLD, CALL, or RAISE (include amount). Do not explain or elaborate."
+        prompt += "\n\nRespond with only one recommendation: FOLD, CALL, or RAISE (include amount if applicable). Do not explain."
 
         return prompt
 
