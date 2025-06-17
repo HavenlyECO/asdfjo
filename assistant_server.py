@@ -1,8 +1,8 @@
 import os
 import time
 import sys
-from typing import Dict, Optional, List, Any, Union
-from flask import Flask, request, jsonify, Response
+from typing import Dict, Optional, List
+from flask import Flask, request, jsonify
 from openai import OpenAI
 from PIL import Image
 import easyocr
@@ -12,12 +12,10 @@ import io
 from dotenv import load_dotenv
 import re
 import logging
-import traceback
-import base64
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Temporarily set to DEBUG for diagnosing client issues
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger('poker_assistant')
@@ -25,7 +23,7 @@ logger = logging.getLogger('poker_assistant')
 # Load environment variables
 load_dotenv()
 
-# Initialize OpenAI client with proper error handling
+# Initialize OpenAI client
 api_key = os.environ.get("OPENAI_API_KEY")
 if not api_key:
     logger.error("OPENAI_API_KEY environment variable not found in .env file")
@@ -218,11 +216,15 @@ def extract_text_easyocr(image: Image.Image) -> str:
     result = reader.readtext(image_np)
     return "\n".join(entry[1] for entry in result)
 
-def extract_table_state(image_data):
-    """Extract and format table state from image data."""
+def extract_table_state(image_file):
+    """Extract and format table state from image file."""
     try:
+        # Ensure the image file pointer is at the start
+        if hasattr(image_file, 'seek'):
+            image_file.seek(0)
+            
         # Open image from file data
-        image = Image.open(image_data)
+        image = Image.open(image_file)
         
         # Extract text using OCR
         text_eo = extract_text_easyocr(image)
@@ -249,10 +251,10 @@ def parse_game_state(text_lines):
         "raw_lines": text_lines,
         
         # Default values for the assistant
-        "position": "unknown",
-        "stack_btn": 0,
-        "stack_bb": 0,
-        "street": "unknown"
+        "position": "BTN",
+        "stack_btn": 50,
+        "stack_bb": 50,
+        "street": "preflop"
     }
     
     # Detection patterns
@@ -261,12 +263,12 @@ def parse_game_state(text_lines):
         if "pot" in line.lower():
             pot_match = re.search(r"pot[:\s]*([\d,\.]+)", line, re.IGNORECASE)
             if pot_match:
-                state["pot"] = pot_match.group(1).replace(",", "")
+                state["pot"] = float(pot_match.group(1).replace(",", ""))
         
         # Currency symbol detection
         pot_match = re.search(r"[\$€£][\s]*([\d,\.]+)", line, re.IGNORECASE)
         if pot_match and not state["pot"]:
-            state["pot"] = pot_match.group(1).replace(",", "")
+            state["pot"] = float(pot_match.group(1).replace(",", ""))
             
         # Game phase detection
         if any(word in line.lower() for word in ["preflop", "pre-flop", "hole"]):
@@ -282,7 +284,29 @@ def parse_game_state(text_lines):
             state["betting_round"] = "river"
             state["street"] = "river"
             
-        # Other detection logic...
+        # Position detection
+        if any(pos in line.lower() for pos in ["btn", "button"]):
+            state["position"] = "BTN"
+        elif any(pos in line.lower() for pos in ["sb", "small blind"]):
+            state["position"] = "SB"
+        elif any(pos in line.lower() for pos in ["bb", "big blind"]):
+            state["position"] = "BB"
+            
+        # Stack size detection
+        stack_match = re.search(r"stack[:\s]*([\d,\.]+)", line, re.IGNORECASE)
+        if stack_match:
+            if "btn" in line.lower() or "button" in line.lower():
+                state["stack_btn"] = float(stack_match.group(1).replace(",", ""))
+            elif "bb" in line.lower() or "big blind" in line.lower():
+                state["stack_bb"] = float(stack_match.group(1).replace(",", ""))
+            
+        # Action detection
+        if "3bet" in line.lower() or "3-bet" in line.lower():
+            state["action"] = line
+            
+    # Ensure pot exists
+    if not state["pot"]:
+        state["pot"] = 3.5  # Default pot size if not detected
     
     logger.info(f"Parsed game state: {state}")
     return state
@@ -329,155 +353,100 @@ def create_app():
     def api_advice():
         logger.info(f"Received API request from {request.remote_addr}")
         
-        # Log raw request data for debugging client issues
+        # Debug request information
         logger.debug(f"Content-Type: {request.content_type}")
         logger.debug(f"Request data length: {request.content_length}")
+        logger.debug(f"Request files keys: {list(request.files.keys())}")
+        logger.debug(f"Request form keys: {list(request.form.keys())}")
         
-        # Dump request headers for debugging
-        header_debug = "\n".join([f"{k}: {v}" for k, v in request.headers.items()])
-        logger.debug(f"Request headers:\n{header_debug}")
-        
-        # Check if we can actually read the data
-        if request.data:
-            logger.debug(f"Raw request data (first 200 bytes): {request.data[:200]}")
+        # Check API key for authentication
+        api_key = request.headers.get("X-Api-Key")
+        expected_key = os.environ.get("POKER_ASSISTANT_API_KEY")
+        if expected_key and api_key != expected_key:
+            logger.warning(f"Invalid API key: {api_key}")
         
         try:
-            # Extract tournament mode from all possible locations
-            tournament_mode = False
+            # Tournament mode flag
+            tournament_mode = request.form.get("tournament_mode", "false").lower() == "true"
             
-            # Strategy 1: Try to get game state from raw request body - Client compatibility
-            if request.data:
-                logger.debug("Attempting to parse raw request body")
-                try:
-                    # Try to parse as direct JSON
-                    raw_data = json.loads(request.data)
-                    
-                    if isinstance(raw_data, dict):
-                        # Check if this is a complete game state
-                        if 'position' in raw_data or 'street' in raw_data or 'pot' in raw_data:
-                            logger.info("Found direct game state in request body")
-                            game_state = raw_data
-                            tournament_mode = raw_data.get('tournament_mode', False)
-                            return process_game_state(game_state, tournament_mode)
-                        
-                        # Check if game_state is a nested property
-                        if 'game_state' in raw_data:
-                            logger.info("Found nested game_state in request body")
-                            game_state = raw_data['game_state']
-                            tournament_mode = raw_data.get('tournament_mode', False)
-                            return process_game_state(game_state, tournament_mode)
-                        
-                        # Check if it has an 'image' property with base64 data
-                        if 'image' in raw_data and isinstance(raw_data['image'], str):
-                            logger.info("Found base64 image in request body")
-                            try:
-                                # Try to decode base64 image
-                                image_data = base64.b64decode(raw_data['image'])
-                                image_file = io.BytesIO(image_data)
-                                return process_image(image_file, raw_data.get('tournament_mode', False))
-                            except Exception as e:
-                                logger.error(f"Error decoding base64 image: {e}")
-                                
-                except Exception as e:
-                    logger.warning(f"Failed to parse raw body as JSON: {e}")
-            
-            # Strategy 2: Check for multipart form data with image
-            if 'image' in request.files:
-                logger.info("Processing image from multipart form")
-                image_file = request.files['image']
-                tournament_mode = request.form.get('tournament_mode', 'false').lower() == 'true'
-                return process_image(image_file, tournament_mode)
-            
-            # Strategy 3: Check for JSON in form data
-            if 'game_state' in request.form:
+            # Properly handle multipart/form-data with image
+            # The client is sending image directly in the files dictionary
+            if request.files:
+                # The image file might be under a different key than 'image'
+                # Get the first file from the files dictionary
+                file_key = next(iter(request.files))
+                image_file = request.files[file_key]
+                
+                logger.info(f"Processing image from multipart form with key: {file_key}")
+                
+                # Extract text from image
+                ocr_lines = extract_table_state(image_file)
+                
+                # Parse game state from OCR text
+                game_state = parse_game_state(ocr_lines)
+                
+                # Get advice using the poker response manager
+                advice = route_from_ocr(game_state, tournament_mode)
+                
+                # Return the advice
+                return jsonify({
+                    "suggestion": advice,
+                    "game_state": game_state,
+                    "ocr_lines": ocr_lines
+                })
+                
+            elif 'game_state' in request.form:
                 logger.info("Processing game state from form data")
                 try:
                     game_state = json.loads(request.form['game_state'])
-                    tournament_mode = request.form.get('tournament_mode', 'false').lower() == 'true'
-                    return process_game_state(game_state, tournament_mode)
+                    advice = route_from_ocr(game_state, tournament_mode)
+                    return jsonify({
+                        "suggestion": advice,
+                        "game_state": game_state
+                    })
                 except json.JSONDecodeError:
-                    logger.error("Invalid game state JSON in form")
+                    logger.error("Invalid game state JSON")
                     return jsonify({"error": "Invalid game state JSON"}), 400
-            
-            # Strategy 4: Silent JSON body parsing (different content types)
-            data = request.get_json(silent=True)
-            if data:
+                
+            elif request.is_json:
                 logger.info("Processing JSON body")
+                data = request.get_json()
                 if 'game_state' in data:
                     game_state = data['game_state']
                     tournament_mode = data.get('tournament_mode', False)
-                    return process_game_state(game_state, tournament_mode)
+                    advice = route_from_ocr(game_state, tournament_mode)
+                    return jsonify({
+                        "suggestion": advice,
+                        "game_state": game_state
+                    })
             
-            # COMPATIBILITY MODE: If we reach here, client is likely sending some other format
-            # Let's create a default game state as fallback for client compatibility
-            logger.warning("No recognizable data format found. Using compatibility mode.")
-            
-            # Client compatibility mode - construct minimal game state from URL parameters
-            default_game_state = {
-                "position": request.args.get('position', 'BTN'),
-                "stack_btn": float(request.args.get('stack_btn', '50')),
-                "stack_bb": float(request.args.get('stack_bb', '50')), 
-                "pot": float(request.args.get('pot', '3.5')),
-                "action": request.args.get('action', ''),
-                "street": request.args.get('street', 'preflop')
-            }
-            
-            logger.info(f"Created default game state: {default_game_state}")
-            return process_game_state(default_game_state, False)
+            # If we reach here, no valid input format was found
+            logger.error("No valid input format found in request")
+            return jsonify({
+                "error": "No valid input format found",
+                "accepted_formats": [
+                    "multipart/form-data with image file",
+                    "multipart/form-data with 'game_state' JSON string",
+                    "application/json with game_state object"
+                ],
+                "received": {
+                    "content_type": request.content_type,
+                    "has_files": bool(request.files),
+                    "form_keys": list(request.form.keys()),
+                    "is_json": request.is_json
+                }
+            }), 400
                 
         except Exception as e:
-            error_details = traceback.format_exc()
-            logger.error(f"Error processing request: {str(e)}\n{error_details}")
+            logger.exception(f"Error processing request: {str(e)}")
             return jsonify({
-                "error": str(e),
-                "details": error_details
+                "error": str(e)
             }), 500
-
-    def process_image(image_file, tournament_mode: bool):
-        """Process an image file to extract and analyze poker state."""
-        try:
-            # Extract text from image
-            ocr_lines = extract_table_state(image_file)
-            
-            # Parse game state from OCR text
-            game_state = parse_game_state(ocr_lines)
-            
-            # Get advice using the poker response manager
-            advice = route_from_ocr(game_state, tournament_mode)
-            
-            # Return the advice
-            return jsonify({
-                "suggestion": advice,
-                "game_state": game_state,
-                "ocr_lines": ocr_lines
-            })
-        except Exception as e:
-            error_details = traceback.format_exc()
-            logger.error(f"Error processing image: {str(e)}\n{error_details}")
-            return jsonify({"error": str(e), "details": error_details}), 500
-
-    def process_game_state(game_state, tournament_mode: bool):
-        """Process a game state object to get poker advice."""
-        try:
-            # Get advice using the poker response manager
-            advice = route_from_ocr(game_state, tournament_mode)
-            
-            # Return the advice
-            return jsonify({
-                "suggestion": advice,
-                "game_state": game_state
-            })
-        except Exception as e:
-            error_details = traceback.format_exc()
-            logger.error(f"Error processing game state: {str(e)}\n{error_details}")
-            return jsonify({"error": str(e), "details": error_details}), 500
-            
+    
     return app
 
-# Example usage
 if __name__ == "__main__":
     app = create_app()
     logger.info("Starting Poker Assistant Server")
     logger.info(f"Loaded {len(response_manager.models)} assistant configurations")
-    # Use host 0.0.0.0 to make the server accessible from any IP
     app.run(debug=True, host="0.0.0.0", port=5000)
