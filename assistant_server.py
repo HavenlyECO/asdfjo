@@ -3,6 +3,7 @@ import time
 from typing import Dict, Optional, List
 from flask import Flask, request, jsonify
 from openai import OpenAI
+import sys
 from PIL import Image
 import easyocr
 import numpy as np
@@ -28,50 +29,26 @@ if not api_key:
     )
 client = OpenAI(api_key=api_key)
 
-# Assistant Management - Architectural pattern for multiple assistants
-class AssistantManager:
-    """Manages multiple OpenAI assistants for poker decision-making."""
+# Assistant management using the standard chat completion API
+class PokerResponseManager:
+    """Modern architecture using OpenAI's Responses API for poker decision-making."""
 
     def __init__(self):
-        self.assistants = {}
-        self.load_assistants()
-        # Initialize all assistant threads with priming message
-        self.threads = {}
-        self.prime_all_assistants()
+        self.models = {}
+        self.load_models()
 
-    def load_assistants(self):
-        """Load assistant IDs from environment variables."""
+    def load_models(self):
+        """Load model configurations from environment variables."""
         for i in range(1, 11):
-            assistant_id = os.environ.get(f"ASSISTANT_{i}")
-            if assistant_id:
-                self.assistants[i] = assistant_id
+            model_id = os.environ.get(f"ASSISTANT_{i}")
+            if model_id:
+                self.models[i] = {
+                    "model": "gpt-4-turbo",
+                    "assistant_id": model_id,
+                    "system_message": f"You are Poker Assistant {i}. Wait for game data to make decision.",
+                }
             else:
                 print(f"Warning: ASSISTANT_{i} not found in environment variables")
-
-    def prime_all_assistants(self):
-        """Initialize all assistant threads with priming message."""
-        for assistant_num, assistant_id in self.assistants.items():
-            thread = client.beta.threads.create()
-            self.threads[assistant_num] = thread.id
-
-            # Send priming message
-            client.beta.threads.messages.create(
-                thread_id=thread.id,
-                role="user",
-                content="wait for game data to make decision"
-            )
-
-            # Run assistant to process priming message
-            run = client.beta.threads.runs.create(
-                thread_id=thread.id,
-                assistant_id=assistant_id,
-                stream=True
-            )
-
-            # Wait for completion
-            for event in run:
-                if event.event == "thread.run.completed":
-                    break
 
     def select_assistant(self, game_state: Dict, tournament_mode: bool) -> int:
         """Select the appropriate assistant based on the updated assistant architecture."""
@@ -150,53 +127,40 @@ class AssistantManager:
 
         return prompt
 
-    def get_assistant_response(self, assistant_num: int, user_input: str) -> str:
-        """Get response from a specific assistant."""
-        assistant_id = self.assistants.get(assistant_num)
-        thread_id = self.threads.get(assistant_num)
+    def get_model_response(self, assistant_num: int, user_input: str) -> str:
+        """Get response using the Chat Completions API."""
+        model_config = self.models.get(assistant_num)
 
-        if not assistant_id:
+        if not model_config:
             return "Error: Assistant not found"
 
-        if not thread_id:
-            # Create thread if not exists (shouldn't happen with priming)
-            thread = client.beta.threads.create()
-            thread_id = thread.id
-            self.threads[assistant_num] = thread_id
+        try:
+            messages = [
+                {"role": "system", "content": model_config["system_message"]},
+                {"role": "user", "content": user_input},
+            ]
 
-        # Add user message to thread
-        client.beta.threads.messages.create(
-            thread_id=thread_id,
-            role="user",
-            content=user_input
-        )
+            response = client.chat.completions.create(
+                model=model_config["model"],
+                messages=messages,
+                max_tokens=300,
+                temperature=0.3,
+                stream=True,
+            )
 
-        # Run assistant
-        run = client.beta.threads.runs.create(
-            thread_id=thread_id,
-            assistant_id=assistant_id,
-            stream=True
-        )
+            collected_content: List[str] = []
+            for chunk in response:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    collected_content.append(chunk.choices[0].delta.content)
+                    sys.stdout.write(".")
+                    sys.stdout.flush()
 
-        # Wait for completion
-        for event in run:
-            if event.event == "thread.run.completed":
-                break
+            sys.stdout.write("\n")
+            return "".join(collected_content)
 
-        # Get the response
-        messages = client.beta.threads.messages.list(
-            thread_id=thread_id,
-            order="desc"  # Get newest messages first
-        )
-
-        # Parse assistant response
-        for message in messages.data:
-            if message.role == "assistant":
-                for content_part in message.content:
-                    if content_part.type == "text":
-                        return content_part.text.value
-
-        return "No response received from assistant."
+        except Exception as e:
+            print(f"API Error: {str(e)}")
+            return f"Error: {str(e)}"
 
     def normalize_response(self, response: str) -> str:
         """Normalize assistant response to standard format."""
@@ -217,17 +181,17 @@ class AssistantManager:
 
         return f"RECOMMEND: UNKNOWN - {response}"
 
-# Create assistant manager
-assistant_manager = AssistantManager()
+# Create response manager
+response_manager = PokerResponseManager()
 
 def route_from_ocr(game_state: Dict, tournament_mode: bool = False) -> str:
     """Route OCR game state to appropriate assistant and get poker decision."""
     try:
-        assistant_num = assistant_manager.select_assistant(game_state, tournament_mode)
-        prompt = assistant_manager.format_prompt(game_state)
+        assistant_num = response_manager.select_assistant(game_state, tournament_mode)
+        prompt = response_manager.format_prompt(game_state)
         prompt = f"{assistant_num}. {prompt}"
-        raw_response = assistant_manager.get_assistant_response(assistant_num, prompt)
-        normalized_response = assistant_manager.normalize_response(raw_response)
+        raw_response = response_manager.get_model_response(assistant_num, prompt)
+        normalized_response = response_manager.normalize_response(raw_response)
         return normalized_response
     except Exception as e:
         return f"ERROR: {str(e)}"
