@@ -20,3 +20,9 @@ The following prompts can be provided to an advanced language model to identify 
 6. **Testing Strategy**
    - "Create a detailed plan for unit and integration tests for each function in `assistant_server.py`. Include mock inputs and expected outputs."
 
+7. **GTO Chart v3 Integration**
+   - "Modify `assistant_server.py` to parse the new `gto_chart.json` structure (version 3.0). Ensure `get_gto_advice` can access hand-strength categories, position data, and action mappings without introducing regressions. Provide clean, well-documented code."
+
+8. **Efficient Lookups**
+   - "Propose data structures or caching strategies to quickly retrieve advice from large GTO charts. The solution should minimize latency when matching game state fields such as pot size, position, and situation type."
+
