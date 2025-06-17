@@ -32,6 +32,7 @@ from flask import Flask, request, jsonify, abort
 from PIL import Image
 import pytesseract
 import easyocr
+import numpy as np  # Add this import at the top of the file
 
 # --- CONFIGURATION ---
 API_KEY = os.environ.get("POKER_ASSISTANT_API_KEY", "changeme")
@@ -64,7 +65,16 @@ def extract_text_pytesseract(image: Image.Image) -> str:
 def extract_text_easyocr(image: Image.Image) -> str:
     """Extract text from image using EasyOCR."""
     reader = easyocr.Reader(["en"], gpu=False)
-    result = reader.readtext(image)
+
+    # Convert PIL Image to numpy array for EasyOCR compatibility
+    image_np = np.array(image)
+
+    # EasyOCR requires numpy array in BGR format (OpenCV style)
+    if len(image_np.shape) == 3 and image_np.shape[2] == 3:
+        # Convert RGB to BGR if needed
+        image_np = image_np[:, :, ::-1].copy()
+
+    result = reader.readtext(image_np)
     return "\n".join(entry[1] for entry in result)
 
 
