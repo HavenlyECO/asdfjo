@@ -1,0 +1,10 @@
+flask
+pytesseract
+pillow
+easyocr
+requests
+mss
+pyttsx3
+tkinter
+# keyboard
+# pynput
