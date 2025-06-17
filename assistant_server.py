@@ -165,17 +165,71 @@ def parse_game_state(text_lines):
 # --- GTO Chart Logic ---
 
 def get_gto_advice(game_state, gto_chart):
+    """Action-oriented GTO advice engine that recommends specific actions."""
     pot = game_state.get("pot")
     if not pot:
-        return "Unable to determine pot size for advice."
+        return "Unable to determine pot size. Try adjusting the screen capture region."
+
     try:
-        pot = int(float(pot))
+        pot_value = float(pot.replace(",", ""))
     except Exception:
-        return "Invalid pot size detected."
-    for entry in gto_chart.get("situations", []):
-        if abs(entry.get("pot", 0) - pot) < entry.get("pot_tolerance", 200):
-            return entry.get("suggestion", "No advice found.")
-    return "No advice for current situation."
+        return f"Invalid pot size detected: {pot}"
+
+    # Dynamic BB estimation based on pot size and game state
+    estimated_bb = 2.0  # Default assumption
+    if pot_value < 10:
+        estimated_bb = 0.1  # Micro stakes
+    elif pot_value < 25:
+        estimated_bb = 0.25  # Small stakes
+
+    # Convert to BB units
+    pot_in_bb = pot_value / estimated_bb
+
+    # Determine game phase (preflop, flop, etc.)
+    betting_round = game_state.get("betting_round", "preflop")
+
+    # Find best matching situation
+    best_match = None
+    min_distance = float('inf')
+
+    for situation in gto_chart.get("situations", []):
+        if situation.get("situation_type") == betting_round:
+            distance = abs(situation.get("pot_in_bb", 0) - pot_in_bb)
+            tolerance = situation.get("tolerance_in_bb", 5)
+
+            if distance <= tolerance and distance < min_distance:
+                min_distance = distance
+                best_match = situation
+
+    if best_match:
+        # Construct detailed advice with specific action
+        hand_strength = best_match.get("hand_strength", {})
+
+        advice = [
+            f"Current situation: {betting_round.upper()} with pot ~{pot_value} ({int(pot_in_bb)}BB)",
+            f"\nRECOMMENDED ACTIONS:",
+            f"- PREMIUM HANDS: {hand_strength.get('premium', {}).get('action', 'CONTINUE')} " +
+            f"{hand_strength.get('premium', {}).get('sizing', '')}",
+            f"- STRONG HANDS: {hand_strength.get('strong', {}).get('action', 'CALL')} " +
+            f"{hand_strength.get('strong', {}).get('sizing', '')}",
+            f"- MEDIUM HANDS: {hand_strength.get('medium', {}).get('action', 'CHECK-CALL')}",
+            f"- WEAK HANDS: {hand_strength.get('weak', {}).get('action', 'FOLD')}"
+        ]
+
+        detailed_explanation = hand_strength.get(
+            'strong', {}).get('explanation', '') + " " + hand_strength.get(
+            'medium', {}).get('explanation', '')
+
+        advice.append(f"\nEXPLANATION: {detailed_explanation}")
+
+        return "\n".join(advice)
+
+    # Even the "no match" case provides concrete actions
+    return ("Pot appears to be non-standard size. General advice:\n"
+            "- PREMIUM HANDS: RAISE 3x BB\n"
+            "- STRONG HANDS: CALL\n"
+            "- WEAK HANDS: FOLD\n"
+            "Adjust based on player tendencies and position.")
 
 
 # --- Flask App Factory ---
