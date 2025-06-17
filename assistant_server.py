@@ -88,7 +88,7 @@ def extract_table_state(image: Image.Image):
 # --- Poker Table State Parser ---
 
 def parse_game_state(text_lines):
-    """Parse OCR text lines to extract pot, stacks, and bets with improved ACR detection."""
+    """Advanced game state parser that captures more poker context."""
     import re
 
     state = {
@@ -96,28 +96,56 @@ def parse_game_state(text_lines):
         "player_stacks": {},
         "positions": {},
         "bet_sizes": {},
+        "action": None,
+        "betting_round": None,
+        "cards_on_board": None,
         "raw_lines": text_lines,
     }
-    
-    # Enhanced pot detection for ACR format
+
+    betting_round_indicators = {
+        "preflop": ["preflop", "hole cards", "dealt"],
+        "flop": ["flop", "board:", "community:"],
+        "turn": ["turn", "4th street"],
+        "river": ["river", "5th street"],
+    }
+
     for line in text_lines:
-        # Standard pot format
+        # Identify betting round
+        for round_name, indicators in betting_round_indicators.items():
+            if any(indicator in line.lower() for indicator in indicators):
+                state["betting_round"] = round_name
+                break
+
+        # Detect community cards
+        cards_match = re.search(
+            r"board:?\s*([2-9TJQKA][cdhs]\s*[2-9TJQKA][cdhs]\s*[2-9TJQKA][cdhs](\s*[2-9TJQKA][cdhs])?(\s*[2-9TJQKA][cdhs])?)",
+            line,
+            re.IGNORECASE,
+        )
+        if cards_match:
+            state["cards_on_board"] = cards_match.group(1)
+
+        # Current action detection
+        action_match = re.search(
+            r"action:?\s*(call|raise|bet|fold|check)",
+            line,
+            re.IGNORECASE,
+        )
+        if action_match:
+            state["action"] = action_match.group(1).upper()
+
+        # Pot detection logic
         if "pot" in line.lower():
             pot_match = re.search(r"pot[:\s]*([\d,\.]+)", line, re.IGNORECASE)
             if pot_match:
                 state["pot"] = pot_match.group(1).replace(",", "")
-        
-        # ACR specific formats - look for currency symbols near numbers
+
+        # ACR-specific formats
         pot_match = re.search(r"[\$€£][\s]*([\d,\.]+)", line, re.IGNORECASE)
         if pot_match and not state["pot"]:
             state["pot"] = pot_match.group(1).replace(",", "")
-        
-        # Look for isolated numbers that might be pot sizes
-        pot_match = re.search(r"^[\s]*([\d,\.]+)[\s]*$", line)
-        if pot_match and not state["pot"] and float(pot_match.group(1).replace(",", "")) > 10:
-            state["pot"] = pot_match.group(1).replace(",", "")
-            
-        # Continue with other parsing
+
+        # Continue with existing stack and bet parsing
         stack_match = re.search(
             r"(SB|BB|UTG|MP|CO|BU|BTN|Player\d?)[:\s]*([\d,\.]+)",
             line,
@@ -130,11 +158,7 @@ def parse_game_state(text_lines):
         bet_match = re.search(r"bet[:\s]*([\d,\.]+)", line, re.IGNORECASE)
         if bet_match:
             state["bet_sizes"][line] = bet_match.group(1).replace(",", "")
-    
-    # If we still couldn't find pot, set a default for debugging
-    if not state["pot"]:
-        state["pot"] = "100"  # Default fallback for testing - will be removed after calibration
-        
+
     return state
 
 
