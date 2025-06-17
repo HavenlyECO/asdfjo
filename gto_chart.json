@@ -1,0 +1,22 @@
+{
+  "situations": [
+    {
+      "pot": 1500,
+      "pot_tolerance": 200,
+      "effective_stack": 12000,
+      "suggestion": "Call"
+    },
+    {
+      "pot": 3000,
+      "pot_tolerance": 200,
+      "effective_stack": 10000,
+      "suggestion": "Fold"
+    },
+    {
+      "pot": 5000,
+      "pot_tolerance": 300,
+      "effective_stack": 8000,
+      "suggestion": "Raise"
+    }
+  ]
+}
