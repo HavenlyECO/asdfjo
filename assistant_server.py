@@ -1,7 +1,6 @@
 import os
 import time
 import sys
-import re
 from typing import Dict, Optional, List, Any, Union, Tuple
 from flask import Flask, request, jsonify
 from openai import OpenAI
@@ -10,6 +9,7 @@ import easyocr
 import numpy as np
 from dotenv import load_dotenv
 import logging
+import re
 
 # Configure logging
 logging.basicConfig(
@@ -36,6 +36,104 @@ try:
 except Exception as e:
     logger.error(f"Error initializing EasyOCR: {str(e)}")
     sys.exit(1)
+
+class PlayerIdentifier:
+    """
+    Component responsible for identifying the hero player and extracting their game data.
+    Uses both OCR text and spatial positioning for improved accuracy.
+    """
+    
+    def __init__(self, hero_username="rondaygo"):
+        """Initialize with the hero's username."""
+        self.hero_username = hero_username.lower()
+    
+    def find_hero_in_ocr(self, ocr_lines: List[str], ocr_boxes: List[List]) -> Dict:
+        """
+        Find the hero player in the OCR results and extract their game information.
+        
+        Args:
+            ocr_lines: List of text lines from OCR
+            ocr_boxes: List of bounding boxes for each OCR text line
+            
+        Returns:
+            Dict containing hero's position, stack, and other info
+        """
+        hero_info = {
+            "found": False,
+            "position": "unknown",
+            "stack": 0.0,
+            "cards": []
+        }
+        
+        # First pass: find hero username
+        hero_index = -1
+        for i, line in enumerate(ocr_lines):
+            if self.hero_username.lower() in line.lower():
+                hero_index = i
+                hero_info["found"] = True
+                logger.info(f"Found hero username '{self.hero_username}' in OCR line: {line}")
+                break
+        
+        if hero_index == -1:
+            logger.warning(f"Hero username '{self.hero_username}' not found in OCR text")
+            return hero_info
+            
+        # Second pass: look for hero's stack in nearby lines (usually next or within 3 lines)
+        for offset in range(1, 4):
+            if hero_index + offset < len(ocr_lines):
+                stack_match = re.search(r'(\d+\.?\d*)\s*(?:BB|bb)', ocr_lines[hero_index + offset])
+                if stack_match:
+                    hero_info["stack"] = float(stack_match.group(1))
+                    logger.info(f"Found hero stack: {hero_info['stack']}BB")
+                    break
+        
+        # Third pass: determine hero's position based on UI elements or text
+        position_indicators = {
+            "btn": "BTN",
+            "button": "BTN",
+            "sb": "SB", 
+            "small blind": "SB",
+            "bb": "BB",
+            "big blind": "BB",
+            "utg": "UTG",
+            "middle": "MP",
+            "mp": "MP",
+            "co": "CO",
+            "cutoff": "CO",
+            "dealer": "BTN"
+        }
+        
+        # Look for position indicators near hero's name
+        for offset in range(-3, 4):
+            idx = hero_index + offset
+            if 0 <= idx < len(ocr_lines):
+                line_lower = ocr_lines[idx].lower()
+                for indicator, position in position_indicators.items():
+                    if indicator in line_lower:
+                        hero_info["position"] = position
+                        logger.info(f"Detected hero position: {position}")
+                        break
+        
+        # If no position found, try to determine from spatial arrangement
+        if hero_info["position"] == "unknown" and ocr_boxes:
+            # Analyze the spatial arrangement of text to infer position
+            # This is a simplification - real implementation would use more sophisticated layout analysis
+            # For example, in many poker UIs, bottom center is often the hero's position
+            hero_box = ocr_boxes[hero_index]
+            # Simple heuristic: if hero's name is in bottom half and central area, likely in BB or SB position
+            x_center = (hero_box[0][0] + hero_box[2][0]) / 2
+            y_bottom = hero_box[2][1]
+            
+            # These thresholds would need to be calibrated for the specific poker UI
+            if y_bottom > 0.7:  # Bottom 30% of screen
+                if x_center < 0.4:  # Left side
+                    hero_info["position"] = "SB"
+                elif x_center > 0.6:  # Right side
+                    hero_info["position"] = "BTN"
+                else:  # Center
+                    hero_info["position"] = "BB"
+        
+        return hero_info
 
 class AdvancedPokerParser:
     """
@@ -78,17 +176,22 @@ class AdvancedPokerParser:
         self.pot_pattern = re.compile(r'(?:pot|total)[:\s]*(\d+\.?\d*)', re.IGNORECASE)
         self.bet_pattern = re.compile(r'(?:bet|raise)[:\s]*(?:to)?\s*(\d+\.?\d*)', re.IGNORECASE)
         self.player_pattern = re.compile(r'([A-Za-z0-9_]+)\s+(\d+\.?\d*)\s*BB')
+        self.player_identifier = PlayerIdentifier("rondaygo")
     
-    def parse_ocr_results(self, ocr_lines: List[str]) -> Dict[str, Any]:
+    def parse_ocr_results(self, ocr_data) -> Dict[str, Any]:
         """
         Parse OCR text lines into a comprehensive poker game state using multi-faceted analysis.
         
         Args:
-            ocr_lines: List of text lines from OCR
+            ocr_data: OCR results containing text and bounding boxes
             
         Returns:
             Dict containing parsed poker game state
         """
+        # Extract text and boxes
+        ocr_lines = [item[1] for item in ocr_data]
+        ocr_boxes = [item[0] for item in ocr_data]
+        
         # Initialize with default game state
         game_state = {
             "position": "unknown",
@@ -100,8 +203,17 @@ class AdvancedPokerParser:
             "hero_cards": [],
             "board_cards": [],
             "players": {},
-            "raw_lines": ocr_lines
+            "raw_lines": ocr_lines,
+            "hero_username": "rondaygo",
+            "available_actions": ["FOLD", "CALL", "RAISE"]  # Default available actions
         }
+        
+        # Identify hero player
+        hero_info = self.player_identifier.find_hero_in_ocr(ocr_lines, ocr_boxes)
+        if hero_info["found"]:
+            game_state["position"] = hero_info["position"]
+            if hero_info["stack"] > 0:
+                game_state["hero_stack"] = hero_info["stack"]
         
         # Use a series of specialized extractors
         self._extract_pot(game_state, ocr_lines)
@@ -109,6 +221,7 @@ class AdvancedPokerParser:
         self._extract_street(game_state, ocr_lines)
         self._extract_cards(game_state, ocr_lines)
         self._extract_actions(game_state, ocr_lines)
+        self._extract_available_actions(game_state, ocr_lines)
         
         # Post-processing to normalize data
         self._normalize_game_state(game_state)
@@ -163,19 +276,6 @@ class AdvancedPokerParser:
                                     game_state["stack_bb"] = stack
                                 break
         
-        # Set hero position - often the BB in most poker software layouts
-        if players:
-            # Try to detect which player is the hero based on context
-            for name, player_info in players.items():
-                if "position" in player_info:
-                    if player_info["position"] == "BB":
-                        game_state["position"] = "BB"
-                        break
-            
-            # If no hero position found yet, use the first player with a stack
-            if game_state["position"] == "unknown" and players:
-                game_state["position"] = next(iter(players.values())).get("position", "BTN")
-        
         # Store all players
         game_state["players"] = players
     
@@ -206,7 +306,7 @@ class AdvancedPokerParser:
         for line in ocr_lines:
             card_matches = self.card_pattern.findall(line)
             if card_matches:
-                if "hole" in line.lower() or "hero" in line.lower():
+                if "hole" in line.lower() or "hero" in line.lower() or game_state["hero_username"].lower() in line.lower():
                     game_state["hero_cards"] = card_matches[:2]
                 elif "board" in line.lower() or "community" in line.lower():
                     game_state["board_cards"] = card_matches
@@ -238,6 +338,33 @@ class AdvancedPokerParser:
         if actions:
             game_state["action"] = " ".join(actions)
     
+    def _extract_available_actions(self, game_state: Dict[str, Any], ocr_lines: List[str]) -> None:
+        """Extract available actions from the UI elements."""
+        available_actions = []
+        
+        # Default actions that are always considered
+        default_actions = ["FOLD", "CALL", "RAISE"]
+        
+        for line in ocr_lines:
+            line_lower = line.lower()
+            
+            # Look for UI elements that indicate available actions
+            if "fold" in line_lower:
+                available_actions.append("FOLD")
+            if "check" in line_lower:
+                available_actions.append("CHECK")
+            if "call" in line_lower:
+                available_actions.append("CALL")
+            if "bet" in line_lower or "raise" in line_lower:
+                available_actions.append("RAISE")
+                
+        # If we couldn't find any actions in the UI, use default actions
+        if not available_actions:
+            available_actions = default_actions
+        
+        # Remove duplicates and store
+        game_state["available_actions"] = list(set(available_actions))
+    
     def _normalize_game_state(self, game_state: Dict[str, Any]) -> None:
         """Apply data normalization and validation to ensure usable game state."""
         # Ensure position is valid
@@ -257,6 +384,10 @@ class AdvancedPokerParser:
         # Make sure street is valid 
         if game_state["street"] not in ["preflop", "flop", "turn", "river"]:
             game_state["street"] = "preflop"  # Default
+            
+        # Ensure available_actions includes at least one option
+        if not game_state["available_actions"]:
+            game_state["available_actions"] = ["FOLD", "CALL", "RAISE"]
 
 class PokerResponseManager:
     """Modern architecture using OpenAI's Chat Completions API for poker decision-making."""
@@ -341,6 +472,7 @@ class PokerResponseManager:
         stack_bb = game_state.get("stack_bb", "unknown")
         pot = game_state.get("pot", "unknown")
         action = str(game_state.get("action", ""))
+        available_actions = game_state.get("available_actions", ["FOLD", "CALL", "RAISE"])
         
         prompt = f"{street}. You are in the {position} with {stack_btn}BB. "
         
@@ -362,10 +494,14 @@ class PokerResponseManager:
         if action:
             prompt += f" and has {action}"
         
-        prompt += f". The pot is {pot}BB. What's the optimal decision?"
+        prompt += f". The pot is {pot}BB. "
+        
+        # Specify available actions
+        prompt += f"Available actions: {', '.join(available_actions)}. What's the optimal decision?"
         
         # Add the required ending
-        prompt += "\n\nRespond with only one recommendation: FOLD, CALL, or RAISE (include amount if applicable). Do not explain."
+        response_options = " / ".join(available_actions)
+        prompt += f"\n\nRespond with only one recommendation from these options: {response_options}. Include amount if raising. Do not explain."
         
         return prompt
     
@@ -411,24 +547,28 @@ class PokerResponseManager:
             logger.error(f"API Error: {str(e)}")
             return f"Error: {str(e)}"
     
-    def normalize_response(self, response: str) -> str:
-        """Normalize assistant response to standard format."""
+    def normalize_response(self, response: str, available_actions: List[str]) -> str:
+        """Normalize assistant response to standard format based on available actions."""
         response = response.upper().strip()
         
-        if "FOLD" in response:
+        if "FOLD" in response and "FOLD" in available_actions:
             return "RECOMMEND: FOLD"
         
-        if "CALL" in response:
+        if "CHECK" in response and "CHECK" in available_actions:
+            return "RECOMMEND: CHECK"
+            
+        if "CALL" in response and "CALL" in available_actions:
             return "RECOMMEND: CALL"
         
-        if "RAISE" in response:
+        if "RAISE" in response and "RAISE" in available_actions:
             # Try to extract amount
             match = re.search(r"RAISE\s+TO\s+(\d+(?:\.\d+)?)", response, re.IGNORECASE)
             if match:
                 return f"RECOMMEND: RAISE to {match.group(1)}"
             return "RECOMMEND: RAISE (amount not specified)"
         
-        return f"RECOMMEND: UNKNOWN - {response}"
+        # If we can't match the response to available actions, return the raw response
+        return f"RECOMMEND: {response}"
     
     def process_poker_image(self, image_file) -> Dict[str, Any]:
         """
@@ -441,10 +581,10 @@ class PokerResponseManager:
             Dict with extraction results and poker advice
         """
         # Extract text from image
-        ocr_lines = extract_table_state(image_file)
+        ocr_data = extract_table_state(image_file)
         
         # Parse game state with advanced parser
-        game_state = self.parser.parse_ocr_results(ocr_lines)
+        game_state = self.parser.parse_ocr_results(ocr_data)
         
         # Get advice using the poker response manager
         advice = self.get_poker_advice(game_state, False)
@@ -452,7 +592,7 @@ class PokerResponseManager:
         return {
             "suggestion": advice,
             "game_state": game_state,
-            "ocr_lines": ocr_lines
+            "ocr_lines": [item[1] for item in ocr_data]
         }
     
     def get_poker_advice(self, game_state: Dict, tournament_mode: bool = False) -> str:
@@ -472,8 +612,8 @@ class PokerResponseManager:
             # Get response
             raw_response = self.get_model_response(assistant_num, prompt)
             
-            # Normalize response
-            normalized_response = self.normalize_response(raw_response)
+            # Normalize response based on available actions
+            normalized_response = self.normalize_response(raw_response, game_state.get("available_actions", ["FOLD", "CALL", "RAISE"]))
             
             return normalized_response
         
@@ -502,10 +642,10 @@ def extract_table_state(image_file):
             # Convert RGB to BGR if needed
             image_np = image_np[:, :, ::-1].copy()
         
+        # Get both text and bounding boxes
         result = reader.readtext(image_np)
-        lines = [entry[1].strip() for entry in result if entry[1].strip()]
-        logger.info(f"OCR extracted {len(lines)} lines of text")
-        return lines
+        logger.info(f"OCR extracted {len(result)} text elements")
+        return result
     except Exception as e:
         logger.error(f"Error extracting table state: {str(e)}")
         raise
