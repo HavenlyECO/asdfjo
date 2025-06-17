@@ -1,22 +1,60 @@
 {
+  "version": "3.0",
   "situations": [
     {
-      "pot": 1500,
-      "pot_tolerance": 200,
-      "effective_stack": 12000,
-      "suggestion": "Call"
+      "pot_in_bb": 5,
+      "tolerance_in_bb": 2,
+      "situation_type": "preflop",
+      "position": "any",
+      "hand_strength": {
+        "premium": {
+          "action": "RAISE",
+          "sizing": "3x BB",
+          "explanation": "With premium hands (AA, KK, QQ, AK), raise to 3BB to build pot with strong equity."
+        },
+        "strong": {
+          "action": "RAISE",
+          "sizing": "2.5x BB",
+          "explanation": "With strong hands (AQ, AJ, KQ, JJ, TT), raise to 2.5BB to extract value."
+        },
+        "medium": {
+          "action": "CALL",
+          "explanation": "With medium strength hands (99-22, KJ, QJ, JT suited), flat call to see flop cheaply."
+        },
+        "weak": {
+          "action": "FOLD",
+          "explanation": "With weak hands (low offsuit cards, weak aces), fold to avoid difficult post-flop spots."
+        }
+      }
     },
     {
-      "pot": 3000,
-      "pot_tolerance": 200,
-      "effective_stack": 10000,
-      "suggestion": "Fold"
-    },
-    {
-      "pot": 5000,
-      "pot_tolerance": 300,
-      "effective_stack": 8000,
-      "suggestion": "Raise"
+      "pot_in_bb": 10,
+      "tolerance_in_bb": 3,
+      "situation_type": "flop",
+      "position": "any",
+      "hand_strength": {
+        "strong": {
+          "action": "BET",
+          "sizing": "60-75% pot",
+          "explanation": "With strong hands (top pair+, sets, two pair+), bet 60-75% pot for value."
+        },
+        "draw": {
+          "action": "CHECK-CALL",
+          "alternative": "BET 50% pot",
+          "explanation": "With draws, check-call opponent bets or semi-bluff with 50% pot bet in position."
+        },
+        "weak": {
+          "action": "CHECK-FOLD",
+          "explanation": "With weak hands (no pair, no draw), check and fold to significant pressure."
+        }
+      }
     }
-  ]
+  ],
+  "action_map": {
+    "FOLD": "Fold your hand - your equity is too low to continue profitably",
+    "CHECK": "Check to opponent - waiting for more information or planning check-raise",
+    "CALL": "Call the current bet - your hand has sufficient equity to continue",
+    "BET": "Open betting - taking initiative with value hand or strategic bluff",
+    "RAISE": "Increase the existing bet - for value or as a strategic bluff"
+  }
 }
