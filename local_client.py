@@ -1,41 +1,66 @@
 """
-Poker Assistant Local Thin Client
+Poker Assistant Local Client
 ---------------------------------
-
-Requirements:
-- Python 3.8+
-- mss
-- requests
-- tkinter
-- pyttsx3 (optional, for TTS)
-- (optional: keyboard or pynput for hotkeys)
-
-Setup Instructions:
-1. pip install -r requirements.txt
-2. Edit the config section for your server URL, API key, and the screen region to capture.
-3. Run: python local_client.py
-
-Notes:
-- No business logic is done locally; this only captures the screen, sends to server, and displays advice.
-- Does NOT interact directly with any poker client (just captures image region).
-
-Author: <Your Name>
 """
 
 import io
 import time
 import threading
+import queue
 import requests
 import mss
 from tkinter import Tk, Label, StringVar
 import pyttsx3
 
 # --- CONFIGURATION ---
-SERVER_URL = "http://YOUR_SERVER_IP:5000/api/advice"  # Set your server address here
-API_KEY = "changeme"  # Set to match your server's API key
-CAPTURE_REGION = {"top": 100, "left": 100, "width": 800, "height": 600}  # Adjust to table location
+SERVER_URL = "http://24.199.98.206:5000/api/advice" 
+API_KEY = "your-secure-api-key"  # Set to match your server's API key
+CAPTURE_REGION = {"top": 230, "left": 280, "width": 960, "height": 720}  # ACR dimensions
 LOOP_INTERVAL = 3  # seconds
 ENABLE_TTS = True  # Set False to disable text-to-speech
+
+# --- Speech Engine Management ---
+speech_queue = queue.Queue()
+speech_engine = None
+speech_thread = None
+speech_running = False
+
+def speech_worker():
+    """Dedicated thread for TTS to prevent concurrent engine access"""
+    global speech_engine, speech_running
+    
+    speech_engine = pyttsx3.init()
+    speech_running = True
+    
+    while speech_running:
+        try:
+            text = speech_queue.get(timeout=0.5)
+            if text is None:  # Signal to stop the thread
+                break
+                
+            speech_engine.say(text)
+            speech_engine.runAndWait()
+            speech_queue.task_done()
+        except queue.Empty:
+            continue
+        except Exception as e:
+            print(f"TTS Error: {e}")
+            time.sleep(0.1)  # Prevent CPU thrashing on repeated errors
+
+def speak(text):
+    """Queue text for speaking without blocking"""
+    if not ENABLE_TTS:
+        return
+    
+    global speech_thread
+    
+    # Start speech thread if it doesn't exist
+    if speech_thread is None or not speech_thread.is_alive():
+        speech_thread = threading.Thread(target=speech_worker, daemon=True)
+        speech_thread.start()
+    
+    # Add text to queue (non-blocking)
+    speech_queue.put(text)
 
 # --- Overlay UI ---
 class OverlayWindow:
@@ -45,7 +70,8 @@ class OverlayWindow:
         self.root.attributes('-topmost', True)
         self.root.geometry("+100+100")
         self.var = StringVar()
-        self.label = Label(self.root, textvariable=self.var, font=("Arial", 28), bg="yellow", fg="black", padx=10, pady=10)
+        self.label = Label(self.root, textvariable=self.var, font=("Arial", 28), 
+                          bg="yellow", fg="black", padx=10, pady=10)
         self.label.pack()
         self.var.set("Waiting for advice...")
 
@@ -60,17 +86,7 @@ class OverlayWindow:
     def hide(self):
         self.root.withdraw()
 
-# --- TTS Helper ---
-
-def speak(text):
-    if not ENABLE_TTS:
-        return
-    engine = pyttsx3.init()
-    engine.say(text)
-    engine.runAndWait()
-
 # --- Screenshot and Network ---
-
 def capture_and_send():
     with mss.mss() as sct:
         img = sct.grab(CAPTURE_REGION)
@@ -87,17 +103,34 @@ def capture_and_send():
             return f"Error: {e}", None
 
 # --- Main Loop ---
-
 def main_loop(overlay):
     while True:
         suggestion, data = capture_and_send()
         overlay.set_text(suggestion)
+        
         if ENABLE_TTS:
-            threading.Thread(target=speak, args=(suggestion,), daemon=True).start()
+            speak(suggestion)
+            
         time.sleep(LOOP_INTERVAL)
 
+# --- Cleanup Function ---
+def cleanup():
+    """Ensure proper cleanup of resources"""
+    global speech_running, speech_queue
+    
+    speech_running = False
+    if speech_queue:
+        speech_queue.put(None)  # Signal to stop the thread
+    
+    # Wait briefly for the thread to clean up
+    if speech_thread and speech_thread.is_alive():
+        speech_thread.join(timeout=0.5)
+
 if __name__ == "__main__":
-    overlay = OverlayWindow()
-    threading.Thread(target=main_loop, args=(overlay,), daemon=True).start()
-    overlay.show()
-    overlay.root.mainloop()
+    try:
+        overlay = OverlayWindow()
+        threading.Thread(target=main_loop, args=(overlay,), daemon=True).start()
+        overlay.show()
+        overlay.root.mainloop()
+    finally:
+        cleanup()
