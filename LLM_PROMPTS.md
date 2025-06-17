@@ -26,3 +26,5 @@ The following prompts can be provided to an advanced language model to identify 
 8. **Efficient Lookups**
    - "Propose data structures or caching strategies to quickly retrieve advice from large GTO charts. The solution should minimize latency when matching game state fields such as pot size, position, and situation type."
 
+9. **Environment Key Management**
+   - "Review the project's use of `.env` files and propose enhancements to secure and manage API keys effectively. Outline best practices for secret rotation and deployment."
