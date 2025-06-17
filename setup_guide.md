@@ -15,7 +15,7 @@
    - Create a `.env` file in the project root with the following variables:
      - `POKER_ASSISTANT_API_KEY`
      - `POKER_ASSISTANT_ALLOWED_IPS`
-     - `POKER_ASSISTANT_ID_1` (and additional IDs as needed)
+    - `ASSISTANT_1` (and additional IDs as needed)
      - `OPENAI_API_KEY`
    - Place your `gto_chart.json` in the same directory.
 
