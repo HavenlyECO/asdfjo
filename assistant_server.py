@@ -10,7 +10,7 @@ import json
 from dotenv import load_dotenv
 import re
 
-# Load environment variables
+# Load environment variables - must be called before accessing env vars
 load_dotenv()
 
 # Core configuration
@@ -20,8 +20,13 @@ ALLOWED_IPS = os.environ.get("POKER_ASSISTANT_ALLOWED_IPS", "127.0.0.1,69.110.58
 # Initialize OCR
 reader = easyocr.Reader(["en"], gpu=False)
 
-# Initialize OpenAI client
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+# Initialize OpenAI client - fixed API key handling
+api_key = os.environ.get("OPENAI_API_KEY")
+if not api_key:
+    raise ValueError(
+        "OPENAI_API_KEY environment variable not found. Please set it in your .env file."
+    )
+client = OpenAI(api_key=api_key)
 
 # Assistant Management - Architectural pattern for multiple assistants
 class AssistantManager:
