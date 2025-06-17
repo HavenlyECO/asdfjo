@@ -8,6 +8,7 @@ import easyocr
 import numpy as np
 import json
 from dotenv import load_dotenv
+import re
 
 # Load environment variables
 load_dotenv()
@@ -19,112 +20,206 @@ ALLOWED_IPS = os.environ.get("POKER_ASSISTANT_ALLOWED_IPS", "127.0.0.1,69.110.58
 # Initialize OCR
 reader = easyocr.Reader(["en"], gpu=False)
 
+# Initialize OpenAI client
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
 # Assistant Management - Architectural pattern for multiple assistants
-class AssistantsManager:
-    """Manages multiple OpenAI assistants with thread initialization and interaction."""
-    
+class AssistantManager:
+    """Manages multiple OpenAI assistants for poker decision-making."""
+
     def __init__(self):
-        self.client = OpenAI()
-        self.assistants: Dict[str, str] = {}
-        self.active_threads: Dict[str, str] = {}
-        self.load_assistant_ids()
-        
-    def load_assistant_ids(self):
+        self.assistants = {}
+        self.load_assistants()
+        # Initialize all assistant threads with priming message
+        self.threads = {}
+        self.prime_all_assistants()
+
+    def load_assistants(self):
         """Load assistant IDs from environment variables."""
-        for i in range(1, 11):  # Assistants 1-10
-            assistant_id = os.environ.get(f"POKER_ASSISTANT_ID_{i}")
+        for i in range(1, 11):
+            assistant_id = os.environ.get(f"ASSISTANT_{i}")
             if assistant_id:
-                self.assistants[f"assistant_{i}"] = assistant_id
-    
-    def initialize_threads(self):
+                self.assistants[i] = assistant_id
+            else:
+                print(f"Warning: ASSISTANT_{i} not found in environment variables")
+
+    def prime_all_assistants(self):
         """Initialize all assistant threads with priming message."""
-        for assistant_name, assistant_id in self.assistants.items():
-            thread_id = self._create_and_prime_thread(assistant_id)
-            self.active_threads[assistant_name] = thread_id
-            print(f"Initialized {assistant_name} with thread {thread_id}")
-    
-    def _create_and_prime_thread(self, assistant_id: str) -> str:
-        """Create a new thread and prime it with the standard waiting message."""
-        thread = self.client.beta.threads.create()
-        
-        # Add the standard priming message
-        self.client.beta.threads.messages.create(
-            thread_id=thread.id,
-            role="user",
-            content="wait for game data to make decision"
-        )
-        
-        # Run the assistant to process the priming message
-        run = self.client.beta.threads.runs.create(
-            thread_id=thread.id,
-            assistant_id=assistant_id,
-            stream=True
-        )
-        
-        # Wait for completion
-        for event in run:
-            if event.event == "thread.run.completed":
-                break
-        
-        return thread.id
-    
-    def ask_assistant(self, assistant_number: int, user_input: str) -> str:
-        """Send a message to a specific assistant and get its response."""
-        assistant_name = f"assistant_{assistant_number}"
-        
-        if assistant_name not in self.assistants:
-            return f"Error: Assistant {assistant_number} not found"
-            
-        assistant_id = self.assistants[assistant_name]
-        thread_id = self.active_threads.get(assistant_name)
-        
+        for assistant_num, assistant_id in self.assistants.items():
+            thread = client.beta.threads.create()
+            self.threads[assistant_num] = thread.id
+
+            # Send priming message
+            client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content="wait for game data to make decision"
+            )
+
+            # Run assistant to process priming message
+            run = client.beta.threads.runs.create(
+                thread_id=thread.id,
+                assistant_id=assistant_id,
+                stream=True
+            )
+
+            # Wait for completion
+            for event in run:
+                if event.event == "thread.run.completed":
+                    break
+
+    def select_assistant(self, game_state: Dict, tournament_mode: bool) -> int:
+        """Select the appropriate assistant based on game state."""
+        street = game_state.get("street", "").lower()
+        action = game_state.get("action", "").lower()
+
+        # ICM Tournament logic takes priority if in tournament mode
+        if tournament_mode:
+            return 10  # Tournament ICM Assistant
+
+        # Check for preflop scenarios
+        if street == "preflop":
+            if "3bet" in action or "3-bet" in action:
+                return 3  # 3-Bet Situations Assistant
+            return 1  # Preflop Position Strategy Assistant
+
+        # Check for stack-based scenarios
+        stack_btn = game_state.get("stack_btn", 0)
+        stack_bb = game_state.get("stack_bb", 0)
+        if stack_btn < 20 or stack_bb < 20 or stack_btn > 100 or stack_bb > 100:
+            return 2  # Stack vs Stack Matchups Assistant
+
+        # Check for postflop scenarios
+        if street in ["turn", "river"]:
+            return 4  # Bluff Catching Postflop Assistant
+
+        # Check for polarized ranges
+        if "check-raise" in action or "all-in" in action:
+            return 7  # Polarization Assistant
+
+        # Check for heads-up scenarios
+        player_count = game_state.get("player_count", 0)
+        if player_count == 2:
+            return 9  # Heads-Up Assistant
+
+        # Check for SPR-based decisions (stack-to-pot ratio) in postflop
+        if street in ["flop", "turn", "river"] and game_state.get("pot", 0) > 0:
+            return 8  # SPR/Depth Postflop Assistant
+
+        # Default to GTO Assistant
+        return 6
+
+    def format_prompt(self, game_state: Dict) -> str:
+        """Format game state into natural language prompt."""
+        street = game_state.get("street", "unknown street")
+        position = game_state.get("position", "unknown position")
+        stack_btn = game_state.get("stack_btn", "unknown")
+        stack_bb = game_state.get("stack_bb", "unknown")
+        pot = game_state.get("pot", "unknown")
+        action = game_state.get("action", "unknown")
+
+        prompt = f"{street.capitalize()}. You are on the {position} with {stack_btn}BB. "
+
+        if "bb" in position.lower():
+            prompt += f"The button has {stack_btn}BB. "
+        else:
+            prompt += f"The big blind has {stack_bb}BB. "
+
+        if action != "unknown":
+            prompt += f"{action}. "
+
+        prompt += f"Pot is {pot}BB. What is the optimal move?"
+
+        # Add the required ending
+        prompt += "\n\nRespond with only one recommendation: FOLD, CALL, or RAISE (include amount). Do not explain or elaborate."
+
+        return prompt
+
+    def get_assistant_response(self, assistant_num: int, user_input: str) -> str:
+        """Get response from a specific assistant."""
+        assistant_id = self.assistants.get(assistant_num)
+        thread_id = self.threads.get(assistant_num)
+
+        if not assistant_id:
+            return "Error: Assistant not found"
+
         if not thread_id:
-            # Initialize thread if not yet done
-            thread_id = self._create_and_prime_thread(assistant_id)
-            self.active_threads[assistant_name] = thread_id
-        
-        # Add the user's message to the thread
-        self.client.beta.threads.messages.create(
+            # Create thread if not exists (shouldn't happen with priming)
+            thread = client.beta.threads.create()
+            thread_id = thread.id
+            self.threads[assistant_num] = thread_id
+
+        # Add user message to thread
+        client.beta.threads.messages.create(
             thread_id=thread_id,
             role="user",
             content=user_input
         )
-        
-        # Run the assistant on the thread
-        run = self.client.beta.threads.runs.create(
+
+        # Run assistant
+        run = client.beta.threads.runs.create(
             thread_id=thread_id,
             assistant_id=assistant_id,
             stream=True
         )
-        
-        # Monitor the run through streaming updates
+
+        # Wait for completion
         for event in run:
             if event.event == "thread.run.completed":
                 break
-        
-        # Get the assistant's messages from the thread
-        messages = self.client.beta.threads.messages.list(
+
+        # Get the response
+        messages = client.beta.threads.messages.list(
             thread_id=thread_id,
             order="desc"  # Get newest messages first
         )
-        
-        # Return the latest assistant message
+
+        # Parse assistant response
         for message in messages.data:
             if message.role == "assistant":
                 for content_part in message.content:
                     if content_part.type == "text":
                         return content_part.text.value
-        
+
         return "No response received from assistant."
 
+    def normalize_response(self, response: str) -> str:
+        """Normalize assistant response to standard format."""
+        response = response.upper().strip()
+
+        if "FOLD" in response:
+            return "RECOMMEND: FOLD"
+
+        if "CALL" in response:
+            return "RECOMMEND: CALL"
+
+        if "RAISE" in response:
+            # Try to extract amount
+            match = re.search(r"RAISE\s+TO\s+(\d+(?:\.\d+)?)", response, re.IGNORECASE)
+            if match:
+                return f"RECOMMEND: RAISE to {match.group(1)}"
+            return "RECOMMEND: RAISE (amount not specified)"
+
+        return f"RECOMMEND: UNKNOWN - {response}"
+
 # Create assistant manager
-assistants_manager = AssistantsManager()
+assistant_manager = AssistantManager()
+
+def route_from_ocr(game_state: Dict, tournament_mode: bool = False) -> str:
+    """Route OCR game state to appropriate assistant and get poker decision."""
+    try:
+        assistant_num = assistant_manager.select_assistant(game_state, tournament_mode)
+        prompt = assistant_manager.format_prompt(game_state)
+        prompt = f"{assistant_num}. {prompt}"
+        raw_response = assistant_manager.get_assistant_response(assistant_num, prompt)
+        normalized_response = assistant_manager.normalize_response(raw_response)
+        return normalized_response
+    except Exception as e:
+        return f"ERROR: {str(e)}"
 
 def create_app():
     app = Flask(__name__)
     
-    # Initialize all assistant threads on startup
-    assistants_manager.initialize_threads()
     
     @app.route("/api/advice", methods=["POST"])
     def api_advice():
@@ -132,43 +227,17 @@ def create_app():
             return jsonify({"error": "Unauthorized"}), 403
             
         try:
-            # Extract image from request
             image_data = request.files.get("image")
             if not image_data:
                 return jsonify({"error": "No image provided"}), 400
-                
+
             image = Image.open(image_data)
-            
-            # Extract text from image using optimized OCR
+
             ocr_lines = extract_table_state(image)
-            
-            # Parse game state from OCR text
             game_state = parse_game_state(ocr_lines)
-            
-            # Use assistant 2 for poker advice (as specified in requirements)
-            context = {
-                "game_state": game_state,
-                "ocr_text": "\n".join(ocr_lines),
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-            }
-            
-            # Get advice from assistant 2
-            prompt = f"""
-            Analyze this poker situation and provide specific, actionable advice:
-            
-            OCR TEXT:
-            {context['ocr_text']}
-            
-            GAME STATE:
-            Pot: {game_state.get('pot', 'Unknown')}
-            Betting round: {game_state.get('betting_round', 'Unknown')}
-            Community cards: {game_state.get('community_cards', 'Unknown')}
-            
-            Provide specific advice with ACTIONS (FOLD/CALL/RAISE) and reasoning.
-            """
-            
-            advice = assistants_manager.ask_assistant(2, prompt)
-            
+
+            advice = route_from_ocr(game_state)
+
             return jsonify({"suggestion": advice})
         except Exception as e:
             app.logger.error(f"Error processing request: {e}")
