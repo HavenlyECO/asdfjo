@@ -8,7 +8,7 @@ This project provides a Flask server and a local client for generating poker adv
    ```bash
    pip install -r requirements.txt
    ```
-2. Copy `.env.example` to `.env` and fill in your API keys and assistant IDs.
+2. Copy `.env.template` to `.env` and fill in your API keys and assistant IDs.
 3. Run the server:
    ```bash
    python assistant_server.py
