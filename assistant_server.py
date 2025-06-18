@@ -1,20 +1,21 @@
 import os
 import time
+import re
 from flask import Flask, request, jsonify, stream_with_context, Response
 from dotenv import load_dotenv
 from openai import OpenAI
 import logging
-import re
+import traceback
 
-# --- Load environment variables ---
+# --- Setup ---
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('poker_assistant')
 
-# --- Load all 10 assistant IDs from .env ---
+# Load assistant IDs from .env
 ASSISTANT_IDS = {i: os.getenv(f"ASSISTANT_{i}") for i in range(1, 11)}
 
-# --- OpenAI setup ---
+# OpenAI setup
 api_key = os.environ.get("OPENAI_API_KEY")
 if not api_key:
     logger.error("OPENAI_API_KEY missing")
@@ -23,16 +24,14 @@ client = OpenAI(api_key=api_key)
 
 app = Flask(__name__)
 
-# --- Assistant Routing Logic ---
+# --- Routing Logic ---
 
 def select_assistant(game_state: dict) -> int:
     """Route to correct assistant STRICTLY according to assistant_tags only."""
     tags = game_state.get("assistant_tags", {})
 
     if not isinstance(tags, dict) or not any(tags.values()):
-        raise RuntimeError(
-            "assistant_tags missing or no valid tag is True (cannot select assistant)"
-        )
+        raise ValueError("assistant_tags missing or no valid tag is True (cannot select assistant)")
 
     if tags.get("icm_spot"):
         return 2
@@ -53,7 +52,7 @@ def select_assistant(game_state: dict) -> int:
     if tags.get("overbet_active"):
         return 10
 
-    raise RuntimeError("No assistant tag is set to True (cannot select assistant)")
+    raise ValueError("No assistant tag is set to True (cannot select assistant)")
 
 def format_poker_prompt(game_state: dict) -> str:
     street = game_state.get("street", "Unknown").capitalize()
@@ -101,21 +100,29 @@ def normalize_result(raw_text: str) -> str:
 
 @app.route("/api/advice", methods=["POST"])
 def route_ocr_decision():
-    import traceback
-    t0 = time.time()
     try:
         game_state = request.get_json(force=True, silent=True) or {}
         logger.info(f"Received game_state: {game_state}")
 
-        assistant_id = select_assistant(game_state)
+        # Validate input early, return HTTP 400 for all user/data issues
+        if not game_state or not isinstance(game_state, dict):
+            return jsonify({"error": "Missing or invalid JSON"}), 400
+        if 'assistant_tags' not in game_state or not isinstance(game_state['assistant_tags'], dict) or not any(game_state['assistant_tags'].values()):
+            return jsonify({"error": "assistant_tags missing or no valid tag is True (cannot select assistant)"}), 400
+
+        try:
+            assistant_id = select_assistant(game_state)
+        except ValueError as ve:
+            logger.error(str(ve))
+            return jsonify({"error": str(ve)}), 400
+
         assistant_key = ASSISTANT_IDS.get(assistant_id)
         if not assistant_key:
-            raise RuntimeError(f"Assistant {assistant_id} not configured in .env")
+            logger.error(f"Assistant {assistant_id} not configured in .env")
+            return jsonify({"error": f"Assistant {assistant_id} not configured in .env"}), 500
 
         prompt = format_poker_prompt(game_state)
-        logger.info(
-            f"Routing to assistant {assistant_id}: {prompt.replace(chr(10),' ')}"
-        )
+        logger.info(f"Routing to assistant {assistant_id}: {prompt.replace(chr(10),' ')}")
 
         def generate():
             messages = [
@@ -142,9 +149,11 @@ def route_ocr_decision():
                 yield f"RECOMMEND: UNKNOWN - {str(e)}"
 
         return Response(stream_with_context(generate()), mimetype="text/plain")
+
     except Exception as e:
-        logger.error("Exception in /api/advice: %s\n%s", e, traceback.format_exc())
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        logger.error("Unexpected server error in /api/advice: %s\n%s", e, traceback.format_exc())
+        # Only true server errors return 500 now
+        return jsonify({"error": "Unexpected server error", "details": str(e)}), 500
 
 if __name__ == "__main__":
     app.run("0.0.0.0", 5000, debug=True)
