@@ -115,6 +115,7 @@ def normalize_result(raw_text: str) -> str:
 # --- Main Route ---
 
 @app.route("/api/poker_decision", methods=["POST"])
+@app.route("/api/advice", methods=["POST"])
 def route_ocr_decision():
     t0 = time.time()
     game_state = request.json or {}
