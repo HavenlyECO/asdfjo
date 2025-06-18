@@ -1,11 +1,13 @@
 import os
 import time
 import re
+import io
 from flask import Flask, request, jsonify, stream_with_context, Response
 from dotenv import load_dotenv
 from openai import OpenAI
 import logging
 import traceback
+from PIL import Image
 
 # --- Setup ---
 load_dotenv()
@@ -24,15 +26,10 @@ client = OpenAI(api_key=api_key)
 
 app = Flask(__name__)
 
-# --- Routing Logic ---
-
 def select_assistant(game_state: dict) -> int:
-    """Route to correct assistant STRICTLY according to assistant_tags only."""
     tags = game_state.get("assistant_tags", {})
-
     if not isinstance(tags, dict) or not any(tags.values()):
         raise ValueError("assistant_tags missing or no valid tag is True (cannot select assistant)")
-
     if tags.get("icm_spot"):
         return 2
     if tags.get("exploit_spot"):
@@ -51,7 +48,6 @@ def select_assistant(game_state: dict) -> int:
         return 9
     if tags.get("overbet_active"):
         return 10
-
     raise ValueError("No assistant tag is set to True (cannot select assistant)")
 
 def format_poker_prompt(game_state: dict) -> str:
@@ -96,17 +92,43 @@ def normalize_result(raw_text: str) -> str:
         return "RECOMMEND: RAISE"
     return f"RECOMMEND: UNKNOWN - {raw_text.strip()}"
 
-# --- Main Route ---
+def extract_game_state_from_image(image: Image.Image) -> dict:
+    """
+    Stub for image interpretation logic.
+    You must implement actual logic or ML model here to extract game state from the given image.
+    For now, returns a sample/dummy game state.
+    """
+    # TODO: Implement actual image-to-state extraction logic
+    # Example dummy state:
+    return {
+        "assistant_tags": {"preflop": True},
+        "street": "preflop",
+        "position": "UTG",
+        "hero_stack": "60",
+        "bb_stack": "60",
+        "action": "",
+        "pot": "1.5",
+        "board_cards": [],
+        "villain_action": "",
+        "available_actions": ["FOLD", "CALL", "RAISE"]
+    }
 
 @app.route("/api/advice", methods=["POST"])
-def route_ocr_decision():
+def route_image_decision():
     try:
-        game_state = request.get_json(force=True, silent=True) or {}
-        logger.info(f"Received game_state: {game_state}")
+        # Receive image file and extract game state
+        if 'screenshot' not in request.files:
+            return jsonify({"error": "Missing screenshot file"}), 400
+        img_file = request.files['screenshot']
+        image = Image.open(img_file.stream).convert("RGB")
+        
+        # Extract game state from image
+        game_state = extract_game_state_from_image(image)
+        logger.info(f"Extracted game_state: {game_state}")
 
         # Validate input early, return HTTP 400 for all user/data issues
         if not game_state or not isinstance(game_state, dict):
-            return jsonify({"error": "Missing or invalid JSON"}), 400
+            return jsonify({"error": "Missing or invalid game_state"}), 400
         if 'assistant_tags' not in game_state or not isinstance(game_state['assistant_tags'], dict) or not any(game_state['assistant_tags'].values()):
             return jsonify({"error": "assistant_tags missing or no valid tag is True (cannot select assistant)"}), 400
 
@@ -152,7 +174,6 @@ def route_ocr_decision():
 
     except Exception as e:
         logger.error("Unexpected server error in /api/advice: %s\n%s", e, traceback.format_exc())
-        # Only true server errors return 500 now
         return jsonify({"error": "Unexpected server error", "details": str(e)}), 500
 
 if __name__ == "__main__":
