@@ -1,20 +1,20 @@
 import os
 import time
-import re
 from flask import Flask, request, jsonify, stream_with_context, Response
 from dotenv import load_dotenv
 from openai import OpenAI
 import logging
+import re
 
-# --- Setup ---
+# --- Load environment variables ---
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('poker_assistant')
 
-# Load assistant IDs from .env
+# --- Load all 10 assistant IDs from .env ---
 ASSISTANT_IDS = {i: os.getenv(f"ASSISTANT_{i}") for i in range(1, 11)}
 
-# OpenAI setup
+# --- OpenAI setup ---
 api_key = os.environ.get("OPENAI_API_KEY")
 if not api_key:
     logger.error("OPENAI_API_KEY missing")
@@ -23,10 +23,9 @@ client = OpenAI(api_key=api_key)
 
 app = Flask(__name__)
 
-# --- Routing Logic ---
+# --- Assistant Routing Logic ---
 
 def select_assistant(game_state: dict) -> int:
-    """Route to correct assistant according to new architecture."""
     street = game_state.get("street", "").lower()
     position = game_state.get("position", "").lower()
     stack = game_state.get("hero_stack", 100)
@@ -70,8 +69,6 @@ def select_assistant(game_state: dict) -> int:
     # 1: Preflop Position Assistant (default)
     if street == "preflop":
         return 1
-    # fallback
-    return 1
 
 def format_poker_prompt(game_state: dict) -> str:
     street = game_state.get("street", "Unknown").capitalize()
@@ -93,7 +90,7 @@ def format_poker_prompt(game_state: dict) -> str:
         prompt += f" and has {action}"
     if pot != "unknown":
         prompt += f". The pot is {pot}BB."
-    if board and street != "preflop":
+    if board and street != "Preflop":
         prompt += f" Board: {board}."
     prompt += f" What’s the optimal decision?\n\n"
     prompt += f"Respond with only one recommendation: {', '.join(available)}"
@@ -120,7 +117,6 @@ def normalize_result(raw_text: str) -> str:
 @app.route("/api/poker_decision", methods=["POST"])
 def route_ocr_decision():
     t0 = time.time()
-    # Assume game_state comes as JSON in the POST body (already parsed by upstream OCR)
     game_state = request.json or {}
 
     assistant_id = select_assistant(game_state)
@@ -160,6 +156,5 @@ def route_ocr_decision():
     resp.headers["X-Elapsed"] = str(time.time() - t0)
     return resp
 
-# --- Flask entrypoint ---
 if __name__ == "__main__":
     app.run("0.0.0.0", 5000, debug=True)
