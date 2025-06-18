@@ -1,0 +1,56 @@
+{
+  "street": "preflop",
+  "position": "SB",
+  "hero_stack": 42.5,
+  "bb_stack": 84,
+  "pot": 7.5,
+  "available_actions": ["FOLD", "CALL", "RAISE"],
+  "action": "facing 3-bet to 9BB",
+  "villain_action": "3-bet to 9BB",
+  "villain_stats": {
+    "vpip": 28,
+    "fold_to_3b": 60,
+    "pfr": 21,
+    "af": 2.1
+  },
+  "board_cards": [],
+  "spr": 5.6,
+  "icm": false,
+  "bubble": false,
+  "overbet": false,
+  "pot_odds": 0.23,
+  "ev_fold": null,
+  "ev_call": null,
+  "ev_raise": null,
+  "tournament": {
+    "stage": "early",
+    "players_left": 42,
+    "avg_stack": 61.2,
+    "hero_chip_position": "below average"
+  },
+  "table_info": {
+    "buy_in": 109,
+    "format": "MTT",
+    "blind_level": "400/800/100"
+  },
+  "player_image": {
+    "recent_history": [
+      "folded to 3-bet last 2 orbits",
+      "recent hero call with A-high"
+    ],
+    "perceived_image": "tight-aggressive"
+  },
+  "notes": "Villain is a reg, shows down light in late position",
+  "assistant_tags": {
+    "preflop": true,
+    "vs_3bet": true,
+    "exploit_spot": true,
+    "icm_spot": false,
+    "pot_odds_relevant": true,
+    "spr_sensitive": true,
+    "image_shift_active": true,
+    "bluff_catch_scenario": false,
+    "overbet_active": false,
+    "ev_delta_available": false
+  }
+}
