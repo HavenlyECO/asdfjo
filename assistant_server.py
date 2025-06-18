@@ -116,45 +116,50 @@ def normalize_result(raw_text: str) -> str:
 
 @app.route("/api/advice", methods=["POST"])
 def route_ocr_decision():
+    import traceback
     t0 = time.time()
-    game_state = request.get_json(force=True, silent=True) or {}
+    try:
+        game_state = request.get_json(force=True, silent=True) or {}
+        logger.info(f"Received game_state: {game_state}")
 
-    assistant_id = select_assistant(game_state)
-    assistant_key = ASSISTANT_IDS.get(assistant_id)
-    if not assistant_key:
-        return jsonify({"error": f"Assistant {assistant_id} not configured"}), 500
+        assistant_id = select_assistant(game_state)
+        assistant_key = ASSISTANT_IDS.get(assistant_id)
+        if not assistant_key:
+            raise RuntimeError(f"Assistant {assistant_id} not configured in .env")
 
-    prompt = format_poker_prompt(game_state)
-    logger.info(f"Routing to assistant {assistant_id}: {prompt.replace(chr(10),' ')}")
+        prompt = format_poker_prompt(game_state)
+        logger.info(
+            f"Routing to assistant {assistant_id}: {prompt.replace(chr(10),' ')}"
+        )
 
-    def generate():
-        messages = [
-            {"role": "system", "content": f"You are {assistant_key}."},
-            {"role": "user", "content": prompt}
-        ]
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4-turbo",
-                messages=messages,
-                max_tokens=50,
-                temperature=0.2,
-                stream=True,
-            )
-            buffer = ""
-            for chunk in response:
-                content = getattr(chunk.choices[0].delta, "content", None)
-                if content:
-                    buffer += content
-                    yield content
-            # Yield normalized result as a comment for API clients
-            yield f"\n\n<!-- {normalize_result(buffer)} -->"
-        except Exception as e:
-            logger.error(f"OpenAI error: {e}")
-            yield f"RECOMMEND: UNKNOWN - {str(e)}"
+        def generate():
+            messages = [
+                {"role": "system", "content": f"You are {assistant_key}."},
+                {"role": "user", "content": prompt}
+            ]
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4-turbo",
+                    messages=messages,
+                    max_tokens=50,
+                    temperature=0.2,
+                    stream=True,
+                )
+                buffer = ""
+                for chunk in response:
+                    content = getattr(chunk.choices[0].delta, "content", None)
+                    if content:
+                        buffer += content
+                        yield content
+                yield f"\n\n<!-- {normalize_result(buffer)} -->"
+            except Exception as e:
+                logger.error(f"OpenAI error: {e}\n{traceback.format_exc()}")
+                yield f"RECOMMEND: UNKNOWN - {str(e)}"
 
-    resp = Response(stream_with_context(generate()), mimetype="text/plain")
-    resp.headers["X-Elapsed"] = str(time.time() - t0)
-    return resp
+        return Response(stream_with_context(generate()), mimetype="text/plain")
+    except Exception as e:
+        logger.error("Exception in /api/advice: %s\n%s", e, traceback.format_exc())
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 if __name__ == "__main__":
     app.run("0.0.0.0", 5000, debug=True)
