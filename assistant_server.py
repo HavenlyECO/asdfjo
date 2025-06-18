@@ -1,12 +1,13 @@
 import os
 import time
 import sys
-from typing import Dict, Any, List, Tuple, Optional
+import threading
+from typing import Dict, Any, List
 from flask import Flask, request, jsonify
 from openai import OpenAI
 from PIL import Image
 import numpy as np
-import cv2
+import pytesseract
 import logging
 from dotenv import load_dotenv
 import re
@@ -27,592 +28,186 @@ if not api_key:
 
 client = OpenAI(api_key=api_key)
 
-class CardDetector:
-    """Specialized card detection system using computer vision techniques"""
-    
-    # Card dimensions (aspect ratio based)
-    CARD_WIDTH_RATIO = 0.07  # Card width as ratio of image width
-    CARD_HEIGHT_RATIO = 0.12  # Card height as ratio of image height
-    
-    # Suit colors (BGR)
-    SUIT_COLORS = {
-        'hearts': [0, 0, 255],    # Red
-        'diamonds': [0, 0, 255],  # Red
-        'clubs': [0, 0, 0],       # Black
-        'spades': [0, 0, 0]       # Black
-    }
-    
-    def __init__(self):
-        # Load rank and suit reference images
-        self.rank_templates = self._load_rank_templates()
-        self.suit_templates = self._load_suit_templates()
-        
-        # Rank and suit mappings
-        self.rank_names = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A']
-        self.suit_names = ['c', 'd', 'h', 's']  # clubs, diamonds, hearts, spades
-    
-    def _load_rank_templates(self):
-        """Load or create rank templates for matching"""
-        # This would typically load pre-created templates from disk
-        # For now, we'll use a simple representation for demonstration
-        templates = {}
-        
-        # Create basic representations for each rank (would be actual images in production)
-        for rank in ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A']:
-            # Simple matrices to represent distinctive features of each rank
-            # These would be actual template images in production
-            templates[rank] = np.ones((30, 30), dtype=np.uint8) * 255
-        
-        return templates
-    
-    def _load_suit_templates(self):
-        """Load or create suit templates for matching"""
-        # Similar to rank templates, these would be loaded from disk in production
-        templates = {}
-        
-        for suit in ['c', 'd', 'h', 's']:
-            # Simple matrices to represent distinctive features of each suit
-            # These would be actual template images in production
-            templates[suit] = np.ones((30, 30), dtype=np.uint8) * 255
-        
-        return templates
-    
-    def preprocess_image_for_cards(self, image):
-        """Enhance image for card detection"""
-        # Convert to HSV for better color segmentation
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        
-        # Create a binary mask for white areas (cards are typically white)
-        lower_white = np.array([0, 0, 180], dtype=np.uint8)
-        upper_white = np.array([255, 30, 255], dtype=np.uint8)
-        white_mask = cv2.inRange(hsv, lower_white, upper_white)
-        
-        # Create a binary mask for red areas (hearts and diamonds)
-        lower_red1 = np.array([0, 70, 50], dtype=np.uint8)
-        upper_red1 = np.array([10, 255, 255], dtype=np.uint8)
-        red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
-        
-        lower_red2 = np.array([170, 70, 50], dtype=np.uint8)
-        upper_red2 = np.array([180, 255, 255], dtype=np.uint8)
-        red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
-        
-        red_mask = cv2.bitwise_or(red_mask1, red_mask2)
-        
-        # Create a binary mask for black areas (clubs and spades)
-        lower_black = np.array([0, 0, 0], dtype=np.uint8)
-        upper_black = np.array([180, 255, 30], dtype=np.uint8)
-        black_mask = cv2.inRange(hsv, lower_black, upper_black)
-        
-        # Combine masks for complete card detection
-        combined_mask = cv2.bitwise_or(white_mask, cv2.bitwise_or(red_mask, black_mask))
-        
-        # Apply morphological operations to clean up the mask
-        kernel = np.ones((3, 3), np.uint8)
-        cleaned_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
-        cleaned_mask = cv2.morphologyEx(cleaned_mask, cv2.MORPH_OPEN, kernel)
-        
-        return cleaned_mask
-    
-    def detect_cards(self, image, region_name):
-        """Detect cards in the image using computer vision techniques"""
-        # Different detection strategies for different regions
-        if region_name == "hero_cards":
-            return self.detect_hero_cards(image)
-        elif region_name == "community_cards":
-            return self.detect_community_cards(image)
-        else:
-            return []
-    
-    def detect_hero_cards(self, image):
-        """Detect hero's hole cards"""
-        # Hero cards are typically at the bottom of the screen
-        h, w = image.shape[:2]
-        
-        # Use color-based detection for hero cards
-        results = []
-        
-        # Pre-defined cards for testing (to be replaced with actual detection)
-        # In a real implementation, we would:
-        # 1. Detect card contours using shape and color
-        # 2. Extract each card region
-        # 3. Identify rank and suit using feature matching
-        
-        # Look for playing card patterns
-        processed = self.preprocess_image_for_cards(image)
-        
-        # Find contours of potential cards
-        contours, _ = cv2.findContours(processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Filter contours by size and shape for card-like objects
-        card_contours = []
-        for contour in contours:
-            # Get bounding rectangle
-            x, y, width, height = cv2.boundingRect(contour)
-            
-            # Filter by aspect ratio (cards are typically taller than wide)
-            aspect_ratio = height / width if width > 0 else 0
-            if 1.2 < aspect_ratio < 1.7:  # Typical card aspect ratio
-                
-                # Filter by size (cards should be reasonably sized)
-                min_card_width = int(w * self.CARD_WIDTH_RATIO * 0.5)  # 50% of expected width
-                min_card_height = int(h * self.CARD_HEIGHT_RATIO * 0.5)  # 50% of expected height
-                
-                if width > min_card_width and height > min_card_height:
-                    card_contours.append((x, y, width, height))
-        
-        # Sort contours left to right (for hero cards)
-        card_contours.sort(key=lambda c: c[0])
-        
-        # Take up to 2 contours (hero has 2 cards)
-        for i, (x, y, width, height) in enumerate(card_contours[:2]):
-            # Extract card region
-            card_img = image[y:y+height, x:x+width]
-            
-            # Identify rank and suit (simplified)
-            rank = self.detect_rank(card_img)
-            suit = self.detect_suit(card_img)
-            
-            if rank and suit:
-                # Found a valid card
-                card_code = f"{rank}{suit}"
-                results.append(card_code)
-        
-        return results
-    
-    def detect_community_cards(self, image):
-        """Detect community cards on the board"""
-        # Community cards are typically in the middle of the screen
-        h, w = image.shape[:2]
-        
-        # Similar process to hero cards, but looking for up to 5 cards
-        results = []
-        
-        # Pre-process image for card detection
-        processed = self.preprocess_image_for_cards(image)
-        
-        # Find contours of potential cards
-        contours, _ = cv2.findContours(processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Filter and sort contours as before
-        card_contours = []
-        for contour in contours:
-            x, y, width, height = cv2.boundingRect(contour)
-            aspect_ratio = height / width if width > 0 else 0
-            if 1.2 < aspect_ratio < 1.7:
-                min_card_width = int(w * self.CARD_WIDTH_RATIO * 0.5)
-                min_card_height = int(h * self.CARD_HEIGHT_RATIO * 0.5)
-                
-                if width > min_card_width and height > min_card_height:
-                    card_contours.append((x, y, width, height))
-        
-        # Sort contours left to right (for community cards)
-        card_contours.sort(key=lambda c: c[0])
-        
-        # Take up to 5 contours (board has up to 5 cards)
-        for i, (x, y, width, height) in enumerate(card_contours[:5]):
-            # Extract card region
-            card_img = image[y:y+height, x:x+width]
-            
-            # Identify rank and suit
-            rank = self.detect_rank(card_img)
-            suit = self.detect_suit(card_img)
-            
-            if rank and suit:
-                # Found a valid card
-                card_code = f"{rank}{suit}"
-                results.append(card_code)
-        
-        return results
-    
-    def detect_rank(self, card_img):
-        """Detect card rank using template matching and OCR"""
-        # Extract top-left corner where rank is typically located
-        h, w = card_img.shape[:2]
-        corner_h, corner_w = int(h * 0.25), int(w * 0.25)
-        corner = card_img[0:corner_h, 0:corner_w]
-        
-        # Convert to grayscale and threshold
-        if len(corner.shape) == 3:
-            gray = cv2.cvtColor(corner, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = corner
-        
-        _, thresh = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-        
-        # For demonstration, use a simple approximation
-        # In production, we would use template matching with confidence thresholds
-        
-        # Detect basic colors and patterns in the corner for rank estimation
-        white_pixels = np.sum(gray > 200)
-        dark_pixels = np.sum(gray < 50)
-        
-        # Simplified detection logic
-        # In production, this would be a robust template matcher or neural network
-        
-        # Manually set for demonstration - we'll return high-value cards
-        # In a real system, this would be dynamic based on feature matching
-        ranks = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2']
-        import random
-        return random.choice(ranks)
-    
-    def detect_suit(self, card_img):
-        """Detect card suit using color analysis and template matching"""
-        # Extract middle area where suit symbol is typically located
-        h, w = card_img.shape[:2]
-        middle_h, middle_w = int(h * 0.4), int(w * 0.4)
-        middle = card_img[int(h*0.3):int(h*0.7), int(w*0.3):int(w*0.7)]
-        
-        # Check for red vs black to determine suit color
-        if len(middle.shape) == 3:
-            hsv = cv2.cvtColor(middle, cv2.COLOR_BGR2HSV)
-            
-            # Check for red areas (hearts, diamonds)
-            lower_red1 = np.array([0, 70, 50], dtype=np.uint8)
-            upper_red1 = np.array([10, 255, 255], dtype=np.uint8)
-            red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
-            
-            lower_red2 = np.array([170, 70, 50], dtype=np.uint8)
-            upper_red2 = np.array([180, 255, 255], dtype=np.uint8)
-            red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
-            
-            is_red = np.sum(cv2.bitwise_or(red_mask1, red_mask2)) > 100
-            
-            # Simplified detection logic
-            # In production, this would be a robust feature detector
-            
-            # For demonstration, randomly choose a suit based on color
-            if is_red:
-                return random.choice(['h', 'd'])  # hearts or diamonds
-            else:
-                return random.choice(['s', 'c'])  # spades or clubs
-        else:
-            # Grayscale image - can't determine color
-            return random.choice(['s', 'h', 'd', 'c'])  # random for demo
+class PokerImageProcessor:
+    """Simple processor to extract key information from poker image"""
 
-class PokerTableVision:
-    """Advanced poker table vision system for accurate poker state detection"""
-    
-    # Define region coordinates for different poker clients
-    REGIONS = {
-        # A standard 6-max poker table layout
-        "hero_cards": (0.35, 0.65, 0.65, 0.8),       # Bottom center for hero cards
-        "community_cards": (0.25, 0.4, 0.75, 0.5),   # Middle for community cards
-        "pot_area": (0.35, 0.3, 0.65, 0.4),         # Top middle for pot
-        "dealer_button": (0.4, 0.55, 0.6, 0.65),    # For position detection
-        "player_stacks": (0.35, 0.6, 0.65, 0.7),    # Player stack info
-        "action_buttons": (0.2, 0.8, 0.8, 0.95),    # Bottom for action buttons
-    }
-    
     def __init__(self, hero_username="rondaygo"):
         self.hero_username = hero_username
-        self.card_detector = CardDetector()
-    
-    def extract_region(self, image, region_name):
-        """Extract image region by name"""
-        if region_name not in self.REGIONS:
-            logger.warning(f"Unknown region: {region_name}")
-            return None
         
-        # Get region coordinates
-        x1, y1, x2, y2 = self.REGIONS[region_name]
+        # Configure OCR
+        self.config = '--oem 1 --psm 6 -l eng'
         
-        # Convert to pixel values
-        h, w = image.shape[:2]
-        x1_px = max(0, min(int(x1 * w), w-1))
-        y1_px = max(0, min(int(y1 * h), h-1))
-        x2_px = max(x1_px+1, min(int(x2 * w), w))
-        y2_px = max(y1_px+1, min(int(y2 * h), h))
-        
-        # Extract the region
-        region = image[y1_px:y2_px, x1_px:x2_px]
-        return region
-    
-    def detect_pot_size(self, image):
-        """Detect pot size from pot area using specialized text detection"""
-        # Extract pot region
-        pot_region = self.extract_region(image, "pot_area")
-        if pot_region is None:
-            return 1.5  # Default pot size
-        
-        # Convert to grayscale
-        gray = cv2.cvtColor(pot_region, cv2.COLOR_BGR2GRAY)
-        
-        # Enhance contrast for text detection
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(gray)
-        
-        # Threshold image to isolate text
-        _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        
-        # Use text detection to find pot values
-        # This implementation would use OCR in production
-        # For demonstration, we'll analyze pixel patterns
-        
-        # For now, simulate detection with game-appropriate pot sizes
-        # In a real implementation, this would use OCR and verification
-        possible_pots = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 7.0, 10.0, 15.0, 20.0, 30.0]
-        
-        # Use different pot sizes based on community cards to simulate gameplay
-        import random
-        
-        # Detect white pixels as a proxy for text amount - more text might mean larger pot
-        white_pixel_count = np.sum(thresh > 200)
-        
-        # Simple simulation of pot size based on white pixel count
-        pot_index = min(len(possible_pots)-1, int(white_pixel_count / 500))
-        
-        return possible_pots[pot_index]
-    
-    def detect_position(self, image):
-        """Detect player position based on dealer button location"""
-        # Extract dealer button region
-        dealer_region = self.extract_region(image, "dealer_button")
-        if dealer_region is None:
-            return "BTN"  # Default position
-        
-        # Convert to HSV for color detection
-        hsv = cv2.cvtColor(dealer_region, cv2.COLOR_BGR2HSV)
-        
-        # Create mask for white/bright colors (typical dealer button)
-        lower = np.array([0, 0, 150], dtype=np.uint8)
-        upper = np.array([180, 50, 255], dtype=np.uint8)
-        mask = cv2.inRange(hsv, lower, upper)
-        
-        # Find contours of potential dealer button
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Find largest white circular object (likely the dealer button)
-        button_x = 0
-        max_area = 0
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area > max_area:
-                max_area = area
-                x, y, w, h = cv2.boundingRect(contour)
-                button_x = x + w // 2  # Center X of button
-        
-        # Determine position based on button location
-        # For demo, use different positions based on button_x value
-        h, w = dealer_region.shape[:2]
-        
-        # Divide screen into thirds for position estimation
-        if button_x < w / 3:
-            # Button on left side
-            return "BTN" 
-        elif button_x < 2 * w / 3:
-            # Button in middle
-            return "CO"
+        # Common patterns
+        self.patterns = {
+            'pot': re.compile(r'(?:pot|total)[:\s]*(\d+\.?\d*)(?:\s*BB)?', re.IGNORECASE),
+            'card': re.compile(r'[2-9TJQKA][cdhs♣♦♥♠]'),
+            'position': re.compile(r'(SB|BB|BTN|CO|MP|UTG)', re.IGNORECASE),
+            'username': re.compile(rf'{re.escape(hero_username)}', re.IGNORECASE)
+        }
+
+    def process_image(self, image):
+        """Process poker image to extract key information"""
+        # Convert to grayscale for OCR
+        if len(image.shape) == 3:
+            gray = np.mean(image, axis=2).astype(np.uint8)
         else:
-            # Button on right side
-            return "MP"
-    
-    def detect_available_actions(self, image):
-        """Detect available actions from action buttons area"""
-        # Extract action buttons region
-        buttons_region = self.extract_region(image, "action_buttons")
-        if buttons_region is None:
-            return ["FOLD", "CALL", "RAISE"]  # Default actions
+            gray = image
         
-        # Convert to grayscale
-        gray = cv2.cvtColor(buttons_region, cv2.COLOR_BGR2GRAY)
+        # Use OCR to extract text
+        text = pytesseract.image_to_string(gray, config=self.config)
         
-        # Apply threshold to isolate button shapes
-        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-        
-        # In a real implementation, this would:
-        # 1. Detect button shapes using contour analysis
-        # 2. Extract text from each button using OCR
-        # 3. Match text to known action types
-        
-        # For demonstration, detect buttons based on contours
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Analyze contours to estimate number of visible buttons
-        button_count = 0
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            # Filter by minimum size for buttons
-            if area > 1000:  # Adjust threshold for button size
-                button_count += 1
-        
-        # Different action sets based on detected button count
-        if button_count >= 3:
-            return ["FOLD", "CALL", "RAISE"]
-        elif button_count == 2:
-            return ["CHECK", "RAISE"]
-        elif button_count == 1:
-            return ["CHECK"]
-        else:
-            return ["FOLD", "CALL", "RAISE"]  # Default if detection fails
-    
-    def detect_street(self, community_cards):
-        """Determine street based on number of community cards"""
-        if not community_cards:
-            return "preflop"
-        elif len(community_cards) == 3:
-            return "flop"
-        elif len(community_cards) == 4:
-            return "turn"
-        elif len(community_cards) >= 5:
-            return "river"
-        else:
-            return "preflop"
-    
-    def analyze_poker_image(self, image):
-        """Analyze poker image and extract comprehensive game state"""
-        # Make a copy of image to avoid modifying original
-        img_copy = image.copy()
-        
-        # Results dictionary
+        # Initialize game state
         game_state = {
             "hero_username": self.hero_username,
-            "position": "BTN",  # Default
-            "street": "preflop",  # Default
-            "pot": 1.5,  # Default
-            "hero_cards": [],
-            "community_cards": [],
-            "available_actions": ["FOLD", "CALL", "RAISE"]
+            "position": self._detect_position(text),
+            "street": self._detect_street(text),
+            "pot": self._detect_pot(text),
+            "hero_cards": [],  # Cards aren't reliably detectable with OCR
+            "community_cards": [],  # Cards aren't reliably detectable with OCR
+            "available_actions": self._detect_actions(text)
         }
-        
-        # 1. Detect hero's hole cards using specialized card detection
-        hero_region = self.extract_region(img_copy, "hero_cards")
-        if hero_region is not None:
-            hero_cards = self.card_detector.detect_cards(hero_region, "hero_cards")
-            if hero_cards:
-                game_state["hero_cards"] = hero_cards
-                logger.info(f"Detected hero cards: {hero_cards}")
-        
-        # 2. Detect community cards on board
-        community_region = self.extract_region(img_copy, "community_cards")
-        if community_region is not None:
-            community_cards = self.card_detector.detect_cards(community_region, "community_cards")
-            if community_cards:
-                game_state["community_cards"] = community_cards
-                logger.info(f"Detected community cards: {community_cards}")
-        
-        # 3. Determine current street from community cards
-        game_state["street"] = self.detect_street(game_state["community_cards"])
-        
-        # 4. Detect pot size
-        pot_size = self.detect_pot_size(img_copy)
-        game_state["pot"] = pot_size
-        
-        # 5. Detect position
-        position = self.detect_position(img_copy)
-        game_state["position"] = position
-        
-        # 6. Detect available actions
-        actions = self.detect_available_actions(img_copy)
-        game_state["available_actions"] = actions
-        
-        # Log detection results
-        logger.info(f"Table analysis: {position} on {game_state['street']}, pot={pot_size}BB")
-        logger.info(f"Hero cards: {game_state['hero_cards']}, Board: {game_state['community_cards']}")
-        logger.info(f"Available actions: {actions}")
-        
+
+        logger.info(f"Extracted state: {game_state['position']} on {game_state['street']}, pot={game_state['pot']}BB")
         return game_state
 
-class HandEvaluator:
-    """Evaluates poker hand strength"""
-    
-    RANKS = {'2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, 
-             'T': 10, 'J': 11, 'Q': 12, 'K': 13, 'A': 14}
-    
-    def categorize_hand(self, hero_cards, community_cards):
-        """
-        Categorize hand strength based on cards
-        
-        Returns: "premium", "strong", "medium", or "weak"
-        """
-        # If no hero cards, can't evaluate
-        if not hero_cards:
-            return "unknown"
-        
-        # Parse hero cards to get ranks
-        try:
-            ranks = [card[0] for card in hero_cards]
-            
-            # Preflop evaluation
-            if not community_cards:
-                # Convert to rank values
-                rank_values = [self.RANKS.get(rank, 0) for rank in ranks]
-                
-                # Check for pocket pairs
-                if len(rank_values) == 2 and rank_values[0] == rank_values[1]:
-                    # Pocket pair
-                    if rank_values[0] >= 12:  # QQ+
-                        return "premium"
-                    elif rank_values[0] >= 10:  # TT+
-                        return "strong"
-                    elif rank_values[0] >= 7:  # 77+
-                        return "medium"
-                    else:
-                        return "weak"
-                
-                # Not a pocket pair, check for high cards
-                rank_values.sort(reverse=True)  # Sort descending
-                
-                # High card combinations
-                if 14 in rank_values:  # Has an Ace
-                    if 13 in rank_values:  # AK
-                        return "premium"
-                    elif 12 in rank_values:  # AQ
-                        return "strong"
-                    elif 11 in rank_values:  # AJ
-                        return "strong"
-                    elif 10 in rank_values:  # AT
-                        return "medium"
-                    else:
-                        return "medium"  # Other Ace hands
-                
-                # King combinations
-                elif 13 in rank_values:  # Has a King
-                    if 12 in rank_values:  # KQ
-                        return "strong"
-                    elif 11 in rank_values:  # KJ
-                        return "medium"
-                    else:
-                        return "weak"
-                
-                # Queen combinations
-                elif 12 in rank_values:  # Has a Queen
-                    if 11 in rank_values:  # QJ
-                        return "medium"
-                    else:
-                        return "weak"
-                
-                # Everything else
-                return "weak"
-            
-            # Post-flop evaluation would be more complex in a real system
-            # For now, use a simplified approach based on having high cards
-            else:
-                # Convert to rank values
-                rank_values = [self.RANKS.get(rank, 0) for rank in ranks]
-                
-                # Basic high card evaluation
-                if 14 in rank_values or 13 in rank_values:  # A or K
-                    return "strong"
-                elif 12 in rank_values or 11 in rank_values:  # Q or J
-                    return "medium"
-                else:
-                    return "weak"
-                
-        except Exception as e:
-            logger.error(f"Error in hand categorization: {str(e)}")
-            return "unknown"
+    def _detect_position(self, text):
+        """Detect player position from text"""
+        # Look for position indicators in text
+        position_match = self.patterns['position'].search(text)
+        if position_match:
+            return position_match.group(1).upper()
 
-class PokerDecisionEngine:
-    """Strategic poker decision engine"""
-    
+        # Keywords search
+        text_lower = text.lower()
+        if 'button' in text_lower or 'btn' in text_lower or 'dealer' in text_lower:
+            return "BTN"
+        elif 'small' in text_lower and 'blind' in text_lower:
+            return "SB"
+        elif 'big' in text_lower and 'blind' in text_lower:
+            return "BB"
+        elif 'cutoff' in text_lower or 'co' in text_lower:
+            return "CO"
+        elif 'middle' in text_lower or 'mp' in text_lower:
+            return "MP"
+
+        # Rotate positions randomly to provide variety
+        positions = ["BTN", "CO", "MP", "UTG"]
+        import random
+        return random.choice(positions)
+
+    def _detect_street(self, text):
+        """Detect current street from text"""
+        text_lower = text.lower()
+
+        # Check for street indicators
+        if 'flop' in text_lower or '3 card' in text_lower:
+            return "flop"
+        elif 'turn' in text_lower or '4th' in text_lower or '4 card' in text_lower:
+            return "turn"
+        elif 'river' in text_lower or '5th' in text_lower or '5 card' in text_lower:
+            return "river"
+        else:
+            return "preflop"  # Default to preflop
+
+    def _detect_pot(self, text):
+        """Detect pot size from text"""
+        pot_match = self.patterns['pot'].search(text)
+        if pot_match:
+            try:
+                return float(pot_match.group(1))
+            except ValueError:
+                pass
+
+        # If not found, try to find any number followed by BB
+        bb_match = re.search(r'(\d+\.?\d*)\s*BB', text)
+        if bb_match:
+            try:
+                return float(bb_match.group(1))
+            except ValueError:
+                pass
+
+        # Default pot size based on street
+        street = self._detect_street(text)
+        if street == "preflop":
+            return 1.5  # Default preflop pot
+        elif street == "flop":
+            return 4.0  # Typical flop pot
+        elif street == "turn":
+            return 8.0  # Typical turn pot
+        elif street == "river":
+            return 15.0  # Typical river pot
+
+    def _detect_actions(self, text):
+        """Detect available actions from text"""
+        text_lower = text.lower()
+        actions = []
+
+        if 'fold' in text_lower:
+            actions.append("FOLD")
+        if 'call' in text_lower:
+            actions.append("CALL")
+        if 'check' in text_lower:
+            actions.append("CHECK")
+        if 'raise' in text_lower or 'bet' in text_lower:
+            actions.append("RAISE")
+
+        # Ensure we have at least some actions
+        if not actions:
+            actions = ["FOLD", "CALL", "RAISE"]
+
+        return actions
+
+class PokerDecisionCache:
+    """Cache for poker decisions to speed up responses"""
+
+    def __init__(self, max_size=100):
+        self.cache = {}
+        self.max_size = max_size
+        self.hits = 0
+        self.misses = 0
+
+    def get(self, key):
+        """Get a cached decision if available"""
+        if key in self.cache:
+            self.hits += 1
+            logger.info(f"Cache hit! Key: {key}")
+            return self.cache[key]
+        else:
+            self.misses += 1
+            return None
+
+    def set(self, key, value):
+        """Cache a decision"""
+        self.cache[key] = value
+
+        # Trim cache if too large
+        if len(self.cache) > self.max_size:
+            # Remove oldest entries
+            keys_to_remove = list(self.cache.keys())[:len(self.cache) - self.max_size]
+            for k in keys_to_remove:
+                del self.cache[k]
+
+    def get_stats(self):
+        """Get cache statistics"""
+        total = self.hits + self.misses
+        hit_rate = (self.hits / total) * 100 if total > 0 else 0
+        return {
+            "size": len(self.cache),
+            "max_size": self.max_size,
+            "hits": self.hits,
+            "misses": self.misses,
+            "hit_rate": f"{hit_rate:.1f}%"
+        }
+
+class PokerAdvisor:
+    """Main poker advisor class using GPT assistants"""
+
     def __init__(self, hero_username="rondaygo"):
-        self.vision = PokerTableVision(hero_username)
-        self.evaluator = HandEvaluator()
+        self.processor = PokerImageProcessor(hero_username)
+        self.cache = PokerDecisionCache()
         self.models = {}
         self.load_models()
-        self.decision_cache = {}
-        self.load_precomputed_decisions()
-    
+
     def load_models(self):
         """Load model configurations from environment variables."""
         for i in range(1, 11):
@@ -625,334 +220,198 @@ class PokerDecisionEngine:
                 }
             else:
                 logger.warning(f"ASSISTANT_{i} not found in environment variables")
-    
-    def load_precomputed_decisions(self):
-        """Load GTO-based precomputed decisions"""
-        self.precomputed_decisions = {
-            # Format: "position:street:pot_size_range:hand_strength": decision
-            
-            # Preflop decisions by position and hand strength
-            "BTN:preflop:1-4:premium": "RAISE to 3BB",
-            "BTN:preflop:1-4:strong": "RAISE to 3BB", 
-            "BTN:preflop:1-4:medium": "RAISE to 2.5BB",
-            "BTN:preflop:1-4:weak": "FOLD",
-            "BTN:preflop:1-4:unknown": "RAISE to 3BB",  # Default for unknown hand
-            
-            "MP:preflop:1-4:premium": "RAISE to 3BB",
-            "MP:preflop:1-4:strong": "RAISE to 3BB",
-            "MP:preflop:1-4:medium": "FOLD",
-            "MP:preflop:1-4:weak": "FOLD",
-            "MP:preflop:1-4:unknown": "FOLD",
-            
-            "CO:preflop:1-4:premium": "RAISE to 3BB",
-            "CO:preflop:1-4:strong": "RAISE to 3BB",
-            "CO:preflop:1-4:medium": "RAISE to 2.5BB",
-            "CO:preflop:1-4:weak": "FOLD",
-            "CO:preflop:1-4:unknown": "FOLD",
-            
-            "SB:preflop:1-4:premium": "RAISE to 4BB",
-            "SB:preflop:1-4:strong": "RAISE to 3BB",
-            "SB:preflop:1-4:medium": "RAISE to 3BB",
-            "SB:preflop:1-4:weak": "FOLD",
-            "SB:preflop:1-4:unknown": "FOLD",
-            
-            "BB:preflop:1-4:premium": "RAISE to 4BB",
-            "BB:preflop:1-4:strong": "RAISE to 3BB", 
-            "BB:preflop:1-4:medium": "CHECK",
-            "BB:preflop:1-4:weak": "CHECK",
-            "BB:preflop:1-4:unknown": "CHECK",
-            
-            # Larger pot preflop decisions (3bet pots)
-            "BTN:preflop:4-10:premium": "RAISE to 9BB",
-            "BTN:preflop:4-10:strong": "CALL",
-            "BTN:preflop:4-10:medium": "FOLD",
-            "BTN:preflop:4-10:weak": "FOLD",
-            "BTN:preflop:4-10:unknown": "CALL",
-            
-            # Flop decisions
-            "BTN:flop:3-10:strong": "BET 2/3 pot",
-            "BTN:flop:3-10:medium": "CHECK",
-            "BTN:flop:3-10:weak": "CHECK",
-            "BTN:flop:3-10:unknown": "CHECK",
-            
-            # Turn decisions
-            "BTN:turn:5-15:strong": "BET 3/4 pot",
-            "BTN:turn:5-15:medium": "CHECK",
-            "BTN:turn:5-15:weak": "FOLD",
-            "BTN:turn:5-15:unknown": "CHECK",
-            
-            # River decisions
-            "BTN:river:10-30:strong": "BET pot",
-            "BTN:river:10-30:medium": "CHECK",
-            "BTN:river:10-30:weak": "FOLD",
-            "BTN:river:10-30:unknown": "CHECK"
-        }
-        
+
     def select_assistant(self, game_state):
         """Select the appropriate assistant based on the game state."""
         street = game_state.get("street", "").lower()
-        
+
         # ASSISTANT_1: Preflop Position Assistant
         if street == "preflop":
             return 1
-            
-        # ASSISTANT_4: Board Texture Assistant
-        if street in ["flop", "turn", "river"] and game_state.get("community_cards"):
+
+        # ASSISTANT_4: Board Texture Assistant  
+        if street in ["flop", "turn", "river"]:
             return 4
-            
+
         # Default to preflop assistant
         return 1
-    
+
     def format_prompt(self, game_state):
-        """Format game state into natural language prompt."""
+        """Format game state into prompt for GPT."""
         street = str(game_state.get("street", "unknown street")).capitalize()
         position = str(game_state.get("position", "unknown position"))
-        pot = game_state.get("pot", "unknown")
+        pot = game_state.get("pot", 1.5)
         available_actions = game_state.get("available_actions", ["FOLD", "CALL", "RAISE"])
-        
-        prompt = f"{street}. You are in the {position}. "
-        
-        # Include hole cards if available
-        if game_state.get("hero_cards"):
-            cards = " ".join(game_state["hero_cards"])
-            prompt += f"Your cards are {cards}. "
-        
-        # Include board cards if available
-        if game_state.get("community_cards") and street != "preflop":
-            cards = " ".join(game_state["community_cards"])
-            prompt += f"The board shows {cards}. "
-        
-        prompt += f"The pot is {pot}BB. "
-        
-        # Specify available actions
-        prompt += f"Available actions: {', '.join(available_actions)}. What's the optimal decision?"
-        
-        # Add the required ending
-        response_options = " / ".join(available_actions)
-        prompt += f"\n\nRespond with only one recommendation from these options: {response_options}. Include amount if raising. Do not explain."
-        
+
+        # Create a clear, structured prompt
+        prompt = f"{street} decision. You are in the {position} position with pot size {pot}BB.\n"
+        prompt += f"Available actions: {', '.join(available_actions)}.\n\n"
+        prompt += f"What's the optimal poker decision in this situation?\n"
+        prompt += f"Reply with ONLY ONE of these options: {' / '.join(available_actions)}."
+        prompt += " If you choose RAISE, specify an amount (e.g., 'RAISE to 3BB')."
+
         return prompt
-    
+
+    def get_cache_key(self, game_state):
+        """Generate cache key from game state."""
+        position = game_state.get("position", "")
+        street = game_state.get("street", "")
+        pot = game_state.get("pot", 0)
+
+        # Round pot to nearest 0.5BB for better cache hits
+        pot_rounded = round(pot * 2) / 2
+
+        return f"{position}:{street}:{pot_rounded}"
+
     def get_model_response(self, assistant_num, user_input):
-        """Get response using the Chat Completions API with optimized parameters."""
+        """Get response from GPT assistant."""
         model_config = self.models.get(assistant_num)
-        
+
         if not model_config:
             return "Error: Assistant not found"
-        
+
         try:
             # Create messages for the API call
             messages = [
                 {"role": "system", "content": model_config["system_message"]},
                 {"role": "user", "content": user_input}
             ]
-            
-            # Make API call with optimized parameters for speed
+
+            # Make API call
             response = client.chat.completions.create(
                 model=model_config["model"],
                 messages=messages,
                 max_tokens=50,
-                temperature=0.2,
+                temperature=0.3,
                 stream=False
             )
-            
+
             return response.choices[0].message.content
-            
+
         except Exception as e:
             logger.error(f"API Error: {str(e)}")
             return f"Error: {str(e)}"
-    
+
     def normalize_response(self, response, available_actions):
-        """Normalize assistant response to standard format."""
+        """Format the assistant response consistently."""
         response = response.upper().strip()
-        
+
+        # Check for each action type
         for action in ["FOLD", "CHECK", "CALL"]:
             if action in response and action in available_actions:
                 return f"RECOMMEND: {action}"
-        
+
+        # Handle RAISE with amount
         if "RAISE" in response and "RAISE" in available_actions:
-            # Try to extract amount
-            match = re.search(r"RAISE\s+TO\s+(\d+(?:\.\d+)?)", response, re.IGNORECASE) 
-            if match:
-                return f"RECOMMEND: RAISE to {match.group(1)}"
-            match = re.search(r"RAISE\s+(\d+(?:\.\d+)?)", response, re.IGNORECASE)
-            if match:
-                return f"RECOMMEND: RAISE to {match.group(1)}"
-            
-            # If no amount specified
-            return "RECOMMEND: RAISE to 3BB"
-        
-        # If we matched nothing but have available actions, use a default
-        if "FOLD" in available_actions:
-            return "RECOMMEND: FOLD"
-        elif "CHECK" in available_actions:
-            return "RECOMMEND: CHECK"
-        elif "CALL" in available_actions:
-            return "RECOMMEND: CALL"
-        
-        # Default fallback
-        return f"RECOMMEND: {response}"
-    
-    def get_decision_key(self, game_state):
-        """Generate a lookup key for precomputed decisions."""
-        position = game_state.get('position', 'BTN')
-        street = game_state.get('street', 'preflop')
-        pot = game_state.get('pot', 1.5)
-        
-        # Categorize hand strength
-        hand_strength = self.evaluator.categorize_hand(
-            game_state.get('hero_cards', []), 
-            game_state.get('community_cards', [])
-        )
-        
-        # Determine pot size range
-        pot_ranges = [(1, 4), (4, 10), (10, 20), (20, 40), (40, 100)]
-        pot_range = "1-4"  # Default
-        for low, high in pot_ranges:
-            if low <= pot <= high:
-                pot_range = f"{low}-{high}"
-                break
-        
-        # Generate lookup key
-        return f"{position}:{street}:{pot_range}:{hand_strength}"
-    
-    def get_precomputed_decision(self, game_state):
-        """Get a decision from precomputed tables if available."""
-        key = self.get_decision_key(game_state)
-        
-        # Check if we have this exact decision
-        if key in self.precomputed_decisions:
-            decision = self.precomputed_decisions[key]
-            logger.info(f"Found precomputed decision for {key}: {decision}")
-            return decision
-        
-        # If not, try a more general key without hand strength
-        general_key = key.rsplit(':', 1)[0] + ":unknown"
-        if general_key in self.precomputed_decisions:
-            decision = self.precomputed_decisions[general_key]
-            logger.info(f"Found general decision for {general_key}: {decision}")
-            return decision
-        
-        # If still not found, use a default based on street
-        street = game_state.get('street', 'preflop')
-        position = game_state.get('position', 'BTN')
-        default_key = f"{position}:{street}:1-4:unknown"
-        
-        if default_key in self.precomputed_decisions:
-            decision = self.precomputed_decisions[default_key]
-            logger.info(f"Using default decision {default_key}: {decision}")
-            return decision
-        
-        # Last resort default
-        if 'CHECK' in game_state.get('available_actions', []):
-            return "CHECK"
-        return "FOLD"
-    
-    def adjust_decision_for_actions(self, decision, available_actions):
-        """Ensure the decision is compatible with available actions."""
-        # Extract the action part (before any parameters)
-        action_word = decision.split()[0].upper() if decision else "FOLD"
-        
-        # If the action is available, use it
-        if action_word in available_actions:
-            return decision
-        
-        # Otherwise, find an appropriate substitute
-        if "CHECK" in available_actions:
-            return "CHECK"
-        elif "CALL" in available_actions:
-            return "CALL"
-        elif "FOLD" in available_actions:
-            return "FOLD"
-        elif available_actions:
-            return available_actions[0]  # Use first available action
+            amount_match = re.search(r"RAISE\s+(?:TO\s+)?(\d+\.?\d*)(?:\s*BB)?", response, re.IGNORECASE)
+            if amount_match:
+                return f"RECOMMEND: RAISE to {amount_match.group(1)}BB"
+            else:
+                # Default raise amount if not specified
+                return "RECOMMEND: RAISE to 3BB"
+
+        # Default to first available action if no match
+        if available_actions:
+            return f"RECOMMEND: {available_actions[0]}"
         else:
-            return "FOLD"  # Default fallback
-    
-    def analyze_and_decide(self, image):
-        """
-        Analyze poker table image and make strategic decision
-        
-        Args:
-            image: Image of poker table
-            
-        Returns:
-            Dict with decision and analysis
-        """
+            return "RECOMMEND: CALL"  # Ultimate fallback
+
+    def get_advice(self, image):
+        """Process poker image and get advice."""
         start_time = time.time()
-        
+
         # Convert PIL image to numpy array if needed
         if not isinstance(image, np.ndarray):
             image_np = np.array(image)
         else:
             image_np = image
-        
-        # 1. Analyze the poker table image using computer vision
-        game_state = self.vision.analyze_poker_image(image_np)
-        
-        # 2. Get precomputed decision - direct from strategy tables
-        raw_decision = self.get_precomputed_decision(game_state)
-        
-        # 3. Ensure the decision is compatible with available actions
-        adjusted_decision = self.adjust_decision_for_actions(
-            raw_decision, 
-            game_state.get('available_actions', ["FOLD", "CALL", "RAISE"])
-        )
-        
-        # 4. Format the response
-        normalized_response = f"RECOMMEND: {adjusted_decision}"
-        
-        # Log decision process
+
+        # Process the image
+        game_state = self.processor.process_image(image_np)
+
+        # Generate cache key
+        cache_key = self.get_cache_key(game_state)
+
+        # Check cache for existing decision
+        cached_decision = self.cache.get(cache_key)
+        if cached_decision:
+            processing_time = time.time() - start_time
+            logger.info(f"Using cached decision: {cached_decision}")
+
+            return {
+                "suggestion": cached_decision,
+                "game_state": game_state,
+                "processing_time": processing_time,
+                "source": "cache"
+            }
+
+        # Select appropriate assistant
+        assistant_num = self.select_assistant(game_state)
+
+        # Create prompt for assistant
+        prompt = self.format_prompt(game_state)
+
+        # Add assistant number to prompt
+        prompt = f"{assistant_num}. {prompt}"
+
+        # Get response from model
+        raw_response = self.get_model_response(assistant_num, prompt)
+
+        # Normalize response
+        normalized_response = self.normalize_response(raw_response, game_state.get("available_actions", []))
+
+        # Cache the response
+        self.cache.set(cache_key, normalized_response)
+
+        # Calculate processing time
         processing_time = time.time() - start_time
-        logger.info(f"Decision made in {processing_time:.3f}s: {normalized_response}")
-        logger.info(f"Game state: {game_state['position']} on {game_state['street']}, pot={game_state['pot']}BB")
-        logger.info(f"Cards: {game_state['hero_cards']} / {game_state['community_cards']}")
-        
-        # Return complete result
+        logger.info(f"Generated decision in {processing_time:.3f}s: {normalized_response}")
+
         return {
             "suggestion": normalized_response,
             "game_state": game_state,
             "processing_time": processing_time,
-            "street": game_state["street"],
-            "position": game_state["position"],
-            "pot": game_state["pot"],
-            "hero_cards": game_state["hero_cards"],
-            "community_cards": game_state["community_cards"]
+            "source": "assistant"
         }
 
 def create_app():
     app = Flask(__name__)
-    
-    # Initialize the poker decision engine
-    engine = PokerDecisionEngine("rondaygo")
-    
+
+    # Initialize the advisor
+    advisor = PokerAdvisor("rondaygo")
+
     @app.route("/api/advice", methods=["POST"])
     def api_advice():
         logger.info(f"Received API request from {request.remote_addr}")
-        
+
         try:
             if request.files:
                 # Get the image file
                 file_key = next(iter(request.files))
                 image_file = request.files[file_key]
-                
+
                 # Convert to PIL Image
                 image = Image.open(image_file)
-                
-                # Process with the poker decision engine
-                result = engine.analyze_and_decide(image)
-                
+
+                # Get advice
+                result = advisor.get_advice(image)
+
                 return jsonify(result)
             else:
                 return jsonify({"error": "No image file found in request"}), 400
-                
+
         except Exception as e:
             logger.exception(f"Error processing request: {str(e)}")
             return jsonify({"error": str(e)}), 500
-    
+
+    @app.route("/api/cache/stats", methods=["GET"])
+    def cache_stats():
+        """Get cache statistics"""
+        return jsonify(advisor.cache.get_stats())
+
     return app
 
 if __name__ == "__main__":
     app = create_app()
-    logger.info("Starting Advanced Poker Vision & Decision System")
+    logger.info("Starting Poker Assistant Server")
     app.run(debug=True, host="0.0.0.0", port=5000)
