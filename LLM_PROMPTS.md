@@ -28,3 +28,6 @@ The following prompts can be provided to an advanced language model to identify 
 
 9. **Environment Key Management**
    - "Review the project's use of `.env` files and propose enhancements to secure and manage API keys effectively. Outline best practices for secret rotation and deployment."
+
+10. **Client/Server Request Alignment**
+   - "Examine `local_client.py` and `assistant_server.py` to ensure they use consistent request formats. Suggest improvements so the client can easily send JSON game states, as demonstrated in `post_game_state.py`, while maintaining support for screenshot-based methods if needed. Provide clean code examples."

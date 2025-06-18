@@ -13,6 +13,10 @@ This project provides a Flask server and a local client for generating poker adv
    ```bash
    python assistant_server.py
    ```
-4. Optionally, use `local_client.py` to interact with the server from your desktop.
+4. To quickly test the API with a sample game state, run `post_game_state.py`:
+   ```bash
+   python post_game_state.py
+   ```
+5. Optionally, use `local_client.py` to interact with the server from your desktop.
 
 See `setup_guide.md` for detailed instructions.
