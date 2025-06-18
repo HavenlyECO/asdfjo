@@ -26,49 +26,34 @@ app = Flask(__name__)
 # --- Assistant Routing Logic ---
 
 def select_assistant(game_state: dict) -> int:
-    street = game_state.get("street", "").lower()
-    position = game_state.get("position", "").lower()
-    stack = game_state.get("hero_stack", 100)
-    pot = game_state.get("pot", 0)
-    villain_stats = game_state.get("villain_stats", {})
-    action = game_state.get("action", "").lower()
-    board = game_state.get("board_cards", [])
-    spr = game_state.get("spr", None)
-    image_shift = game_state.get("image_shift", False)
-    overbet = game_state.get("overbet", False)
-    icm_context = game_state.get("icm", False)
-    is_bubble = game_state.get("bubble", False)
+    """Route to correct assistant STRICTLY according to assistant_tags only."""
+    tags = game_state.get("assistant_tags", {})
 
-    # 2: Stack-Based ICM Assistant
-    if icm_context or is_bubble or stack < 15:
+    if not isinstance(tags, dict) or not any(tags.values()):
+        raise RuntimeError(
+            "assistant_tags missing or no valid tag is True (cannot select assistant)"
+        )
+
+    if tags.get("icm_spot"):
         return 2
-    # 3: Villain Exploit Assistant
-    if villain_stats and any(stat in villain_stats for stat in ["vpip", "fold_to_3b", "pfr", "af"]):
+    if tags.get("exploit_spot"):
         return 3
-    # 4: Board Texture Assistant
-    if street in ["flop", "turn", "river"] and board:
-        return 4
-    # 5: Pot Odds Assistant
-    if "pot_odds" in game_state and game_state["pot_odds"] is not None:
-        return 5
-    # 6: Future Street Pressure Assistant
-    if spr is not None and spr < 3:
-        return 6
-    # 7: Bluff Catcher Evaluator
-    if street == "river" and "bluff" in action:
-        return 7
-    # 8: EV Delta Comparator Assistant
-    if "ev_fold" in game_state or "ev_call" in game_state or "ev_raise" in game_state:
-        return 8
-    # 9: Meta-Image Shift Assistant
-    if image_shift:
-        return 9
-    # 10: Overbet Detection Assistant
-    if overbet or (street in ["turn", "river"] and "overbet" in action):
-        return 10
-    # 1: Preflop Position Assistant (default)
-    if street == "preflop":
+    if tags.get("preflop"):
         return 1
+    if tags.get("pot_odds_relevant"):
+        return 5
+    if tags.get("spr_sensitive"):
+        return 6
+    if tags.get("bluff_catch_scenario"):
+        return 7
+    if tags.get("ev_delta_available"):
+        return 8
+    if tags.get("image_shift_active"):
+        return 9
+    if tags.get("overbet_active"):
+        return 10
+
+    raise RuntimeError("No assistant tag is set to True (cannot select assistant)")
 
 def format_poker_prompt(game_state: dict) -> str:
     street = game_state.get("street", "Unknown").capitalize()
