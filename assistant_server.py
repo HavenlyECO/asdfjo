@@ -114,11 +114,10 @@ def normalize_result(raw_text: str) -> str:
 
 # --- Main Route ---
 
-@app.route("/api/poker_decision", methods=["POST"])
 @app.route("/api/advice", methods=["POST"])
 def route_ocr_decision():
     t0 = time.time()
-    game_state = request.json or {}
+    game_state = request.get_json(force=True, silent=True) or {}
 
     assistant_id = select_assistant(game_state)
     assistant_key = ASSISTANT_IDS.get(assistant_id)
