@@ -39,6 +39,7 @@ The repository contains several standalone scripts that can be invoked directly:
 - `python hand_logger.py` – log a few sample hands and export JSON/CSV.
 - `python visual_confidence.py` – demo card/OCR confidence helpers.
 - `python ocrcv_op.py` – simple end‑to‑end capture → OCR → recommendation loop.
+- `python train_card_yolo.py --data card_data.yaml --out card_yolov8.pt` – train the YOLO card detection model.
 
 See `setup_guide.md` for detailed configuration instructions.
 
