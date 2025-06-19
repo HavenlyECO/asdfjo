@@ -12,6 +12,10 @@ from PIL import Image
 import cv2
 import numpy as np
 from game_state_builder import GameStateBuilder
+from ocr_parser import OCRParser
+from card_detector import CardDetector
+from table_layout import PokerTableLayout
+from player_action_parser import PlayerActionParser
 
 # --- Setup ---
 load_dotenv()
@@ -32,6 +36,10 @@ if not api_key:
 client = OpenAI(api_key=api_key)
 
 app = Flask(__name__)
+
+# Global helpers (YOLO loads lazily in background)
+ocr_parser = OCRParser()
+card_detector = CardDetector(enable_yolo=ENABLE_YOLO, lazy_load=True)
 
 def select_assistant(game_state: dict) -> int:
     tags = game_state.get("assistant_tags", {})
@@ -102,22 +110,11 @@ def normalize_result(raw_text: str) -> str:
 def extract_game_state_from_image(image: Image.Image) -> dict:
     """Parse a screenshot into a structured game_state dictionary."""
 
-    import cv2
-    import numpy as np
-
-    from table_layout import PokerTableLayout
-    from ocr_parser import OCRParser
-    from card_detector import CardDetector
-    from player_action_parser import PlayerActionParser
-    from game_state_builder import GameStateBuilder
-
     # Convert PIL → NumPy BGR
     frame = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
     # Layout & helpers
     layout = PokerTableLayout(frame.shape[1], frame.shape[0], "6max")
-    ocr_parser = OCRParser()
-    card_detector = CardDetector(enable_yolo=ENABLE_YOLO)
     action_parser = PlayerActionParser(layout, card_detector=card_detector, ocr_parser=ocr_parser)
 
     # OCR and card detection
