@@ -93,25 +93,38 @@ def normalize_result(raw_text: str) -> str:
     return f"RECOMMEND: UNKNOWN - {raw_text.strip()}"
 
 def extract_game_state_from_image(image: Image.Image) -> dict:
-    """
-    Stub for image interpretation logic.
-    You must implement actual logic or ML model here to extract game state from the given image.
-    For now, returns a sample/dummy game state.
-    """
-    # TODO: Implement actual image-to-state extraction logic
-    # Example dummy state:
-    return {
-        "assistant_tags": {"preflop": True},
-        "street": "preflop",
-        "position": "UTG",
-        "hero_stack": "60",
-        "bb_stack": "60",
-        "action": "",
-        "pot": "1.5",
-        "board_cards": [],
-        "villain_action": "",
-        "available_actions": ["FOLD", "CALL", "RAISE"]
-    }
+    """Parse a screenshot into a structured game_state dictionary."""
+
+    import cv2
+    import numpy as np
+
+    from table_layout import PokerTableLayout
+    from ocr_parser import OCRParser
+    from card_detector import CardDetector
+    from player_action_parser import PlayerActionParser
+    from game_state_builder import GameStateBuilder
+
+    # Convert PIL → NumPy BGR
+    frame = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+
+    # Layout & helpers
+    layout = PokerTableLayout(frame.shape[1], frame.shape[0], "6max")
+    ocr_parser = OCRParser()
+    card_detector = CardDetector()
+    action_parser = PlayerActionParser(layout, card_detector=card_detector, ocr_parser=ocr_parser)
+
+    # OCR and card detection
+    ocr_data, _ = ocr_parser.extract_stacks_and_pot(frame, layout)
+    card_data = card_detector.detect_cards(frame, layout)
+    action_data = action_parser.parse_actions(frame)
+
+    # Build full game state
+    builder = GameStateBuilder(layout)
+    game_state = builder.build_state(ocr_data, card_data, action_data)
+
+    game_state["assistant_tags"] = {"preflop": game_state.get("street") == "preflop"}
+
+    return game_state
 
 @app.route("/api/advice", methods=["POST"])
 def route_image_decision():
