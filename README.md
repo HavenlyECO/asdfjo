@@ -26,7 +26,9 @@ This repository contains a full stack poker assistant that routes on-table infor
 
 The repository contains several standalone scripts that can be invoked directly:
 
-- `python assistant_server.py` – start the Flask API server.
+- `python assistant_server.py` – start the Flask API server. When running,
+  every request saves a `logs/game_states/` snapshot (JSON + PNG) that can later
+  be used with `train_card_yolo.py`.
 - `python local_client.py` – capture the table region and show overlay advice.
 - `python post_game_state.py` – send a sample JSON game state to the server.
 - `python realtime_pipeline.py` – run the demo multithreaded OCR pipeline.
