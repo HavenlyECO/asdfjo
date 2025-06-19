@@ -22,7 +22,11 @@ Clean-room rewrite of the snippet you provided plus the following patches:
 """
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
+from pathlib import Path
+import json
+import cv2
+import datetime as dt
 import re
 
 
@@ -184,3 +188,62 @@ class GameStateBuilder:
                     bb_amt = round(opp_amt / blinds["bb"], 2)
                     return f"facing {pdata['action']} to {bb_amt}BB"
         return ""
+
+    # ──────────────────────────────────────────────────────────────
+    #  Snapshot / logging helpers
+    # ──────────────────────────────────────────────────────────────
+    @staticmethod
+    def log_game_state(
+        game_state: Dict[str, Any],
+        debug_info: Optional[Dict[str, Any]] = None,
+        frame_hash: Optional[str] = None,
+        save_dir: Union[str, Path] = "logs/game_states",
+    ) -> Path:
+        """
+        Dump *game_state* + optional debug into a uniquely-named JSON file.
+        Returns the Path to the written JSON.
+        """
+        save_path = Path(save_dir)
+        save_path.mkdir(parents=True, exist_ok=True)
+
+        # millisecond-precision timestamp avoids overwrite
+        ts = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")[:-3]
+        json_path = save_path / f"game_state_{ts}.json"
+
+        # -- ensure everything is JSON-serialisable -------------------
+        def _to_builtin(obj: Any) -> Any:
+            if obj is None or isinstance(obj, (str, int, float, bool)):
+                return obj
+            if isinstance(obj, (list, tuple)):
+                return [_to_builtin(o) for o in obj]
+            if isinstance(obj, dict):
+                return {k: _to_builtin(v) for k, v in obj.items()}
+            return str(obj)  # fallback for NumPy types etc.
+
+        payload = {
+            "timestamp": ts,
+            "frame_hash": frame_hash,
+            "game_state": _to_builtin(game_state),
+            "debug_info": _to_builtin(debug_info or {}),
+        }
+        json_path.write_text(json.dumps(payload, indent=2))
+        return json_path
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def save_frame_image(
+        frame_bgr,                     # ndarray (BGR)
+        json_path: Union[str, Path],   # returned by log_game_state
+        png_compression: int = 3,
+    ) -> Path:
+        """
+        Write the frame as PNG next to its JSON snapshot.
+        Returns the Path to the PNG.
+        """
+        png_path = Path(json_path).with_suffix(".png")
+        cv2.imwrite(
+            str(png_path),
+            frame_bgr,
+            [cv2.IMWRITE_PNG_COMPRESSION, png_compression],
+        )
+        return png_path
