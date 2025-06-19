@@ -1,24 +1,28 @@
 # Flask web framework
 flask
 
-# OpenAI client library
-openai
-
-# Python imaging
-pillow
-
-# Optical character recognition
-easyocr
-
-# Environment variable loading
-python-dotenv
-
-# HTTP requests and screenshot utilities
+# Core utilities
+numpy
+opencv-python
 requests
 mss
+python-dotenv
+pillow
+
+# OpenAI and model helpers
+openai
+ultralytics
+scikit-learn
+joblib
+eval7
+
+# OCR and text
+easyocr
+imagehash
+pytesseract
 
 # Text-to-speech and UI
 pyttsx3
-tkinter
-# keyboard
-# pynput
+PyQt5
+keyboard
+# tkinter comes with standard Python but may require system packages

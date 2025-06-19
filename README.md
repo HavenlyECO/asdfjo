@@ -22,6 +22,24 @@ This repository contains a full stack poker assistant that routes on-table infor
    python local_client.py
    ```
 
+## Command Line Utilities
+
+The repository contains several standalone scripts that can be invoked directly:
+
+- `python assistant_server.py` – start the Flask API server.
+- `python local_client.py` – capture the table region and show overlay advice.
+- `python post_game_state.py` – send a sample JSON game state to the server.
+- `python realtime_pipeline.py` – run the demo multithreaded OCR pipeline.
+- `python gto_proxy.py --train solver_data.json --out gto_proxy_model.pkl` – train the GTO decision tree model.
+- `python hotkeys.py` – enable global F1/F2/F12 hotkeys.
+- `python table_layout.py` – print computed table layout coordinates.
+- `python frame_change_detector.py` – webcam test for frame change detection.
+- `python equity_calculator.py` – run a quick Monte‑Carlo equity example.
+- `python poker_hud.py` – launch the PyQt HUD demo.
+- `python hand_logger.py` – log a few sample hands and export JSON/CSV.
+- `python visual_confidence.py` – demo card/OCR confidence helpers.
+- `python ocrcv_op.py` – simple end‑to‑end capture → OCR → recommendation loop.
+
 See `setup_guide.md` for detailed configuration instructions.
 
 ## Repository Structure
