@@ -133,26 +133,37 @@ def extract_game_state_from_image(image: Image.Image) -> dict:
 @app.route("/api/advice", methods=["POST"])
 def route_image_decision():
     try:
-        # Receive image file and extract game state
-        if 'screenshot' not in request.files:
-            return jsonify({"error": "Missing screenshot file"}), 400
-        img_file = request.files['screenshot']
-        img_bytes = img_file.read()
-        image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-        frame_hash = hashlib.md5(img_bytes).hexdigest()
-        frame_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-        
-        # Extract game state from image
-        game_state = extract_game_state_from_image(image)
-        logger.info(f"Extracted game_state: {game_state}")
+        game_state = None
+        frame_hash = None
+        frame_bgr = None
 
-        try:
-            json_path = GameStateBuilder.log_game_state(game_state, frame_hash=frame_hash)
-            GameStateBuilder.save_frame_image(frame_bgr, json_path)
-        except Exception as log_err:
-            logger.error(f"Game state logging failed: {log_err}")
+        if 'screenshot' in request.files:
+            img_file = request.files['screenshot']
+            img_bytes = img_file.read()
+            image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+            frame_hash = hashlib.md5(img_bytes).hexdigest()
+            frame_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
-        # Validate input early, return HTTP 400 for all user/data issues
+            # Extract game state from image
+            game_state = extract_game_state_from_image(image)
+            logger.info(f"Extracted game_state: {game_state}")
+
+            try:
+                json_path = GameStateBuilder.log_game_state(game_state, frame_hash=frame_hash)
+                png_path = GameStateBuilder.save_frame_image(frame_bgr, json_path)
+                logger.info(f"Saved game state snapshot to {json_path} and {png_path}")
+            except Exception as log_err:
+                logger.error(f"Game state logging failed: {log_err}")
+        else:
+            game_state = request.get_json(force=True, silent=True) or {}
+            logger.info(f"Received game_state JSON: {game_state}")
+
+            try:
+                json_path = GameStateBuilder.log_game_state(game_state, frame_hash=None)
+                logger.info(f"Saved game state snapshot to {json_path}")
+            except Exception as log_err:
+                logger.error(f"Game state logging failed: {log_err}")
+
         if not game_state or not isinstance(game_state, dict):
             return jsonify({"error": "Missing or invalid game_state"}), 400
         if 'assistant_tags' not in game_state or not isinstance(game_state['assistant_tags'], dict) or not any(game_state['assistant_tags'].values()):
