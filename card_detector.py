@@ -21,12 +21,15 @@ Major tweaks
 6. **draw_card_detections()** – one helper to avoid DRY; supports any crop name
    (hero or community), draws directly on *img* with absolute coords so the
    overlay is correct even if you pass the frame to a UI.
+7. **Lazy loading** – optional background thread delays YOLO weight initialisation
+   so the server can start instantly.
 """
 from __future__ import annotations
 
 from typing import List, Dict, Tuple, Optional
 import cv2
 import numpy as np
+import threading
 try:
     from ultralytics import YOLO
 except Exception:  # YOLO is optional
@@ -42,14 +45,23 @@ class CardDetector:
                  use_fallback: bool = True,
                  phash_templates: Dict[str, 'imagehash.ImageHash'] | None = None,
                  fallback_cnn: Optional[callable] = None,
-                 phash_max_dist: int = 8):
-        """card_yolov8.pt must be trained with class names like 'ah', 'ks', ..."""
+                 phash_max_dist: int = 8,
+                 lazy_load: bool = False):
+        """card_yolov8.pt must be trained with class names like 'ah', 'ks', ...
+
+        Parameters
+        ----------
+        lazy_load: bool
+            If True, the YOLO model loads in a background thread so the
+            constructor returns immediately.
+        """
         self.model = None
+        self._model_path = model_path
         if enable_yolo and YOLO is not None:
-            try:
-                self.model = YOLO(model_path)
-            except Exception as e:
-                print(f"CardDetector: YOLO disabled ({e})")
+            if lazy_load:
+                threading.Thread(target=self._load_model, daemon=True).start()
+            else:
+                self._load_model()
         self.low_conf_threshold = low_conf_threshold
         self.use_fallback       = use_fallback
         self.phash_templates    = phash_templates or {}
@@ -57,6 +69,12 @@ class CardDetector:
         self.phash_max_dist     = phash_max_dist
 
         self._cache = {"hole": [], "board": []}    # flicker smoothing
+
+    def _load_model(self) -> None:
+        try:
+            self.model = YOLO(self._model_path)
+        except Exception as e:
+            print(f"CardDetector: YOLO disabled ({e})")
 
     # ------------------------------------------------------------------
     #   Public API
