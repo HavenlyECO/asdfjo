@@ -18,6 +18,9 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('poker_assistant')
 
+# Toggle YOLO card detection via environment
+ENABLE_YOLO = os.getenv("ENABLE_YOLO", "1").lower() not in {"0", "false", "no"}
+
 # Load assistant IDs from .env
 ASSISTANT_IDS = {i: os.getenv(f"ASSISTANT_{i}") for i in range(1, 11)}
 
@@ -114,7 +117,7 @@ def extract_game_state_from_image(image: Image.Image) -> dict:
     # Layout & helpers
     layout = PokerTableLayout(frame.shape[1], frame.shape[0], "6max")
     ocr_parser = OCRParser()
-    card_detector = CardDetector()
+    card_detector = CardDetector(enable_yolo=ENABLE_YOLO)
     action_parser = PlayerActionParser(layout, card_detector=card_detector, ocr_parser=ocr_parser)
 
     # OCR and card detection
