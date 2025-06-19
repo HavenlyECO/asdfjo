@@ -27,20 +27,29 @@ from __future__ import annotations
 from typing import List, Dict, Tuple, Optional
 import cv2
 import numpy as np
-from ultralytics import YOLO
+try:
+    from ultralytics import YOLO
+except Exception:  # YOLO is optional
+    YOLO = None
 
 
 class CardDetector:
     def __init__(self,
                  model_path: str = "card_yolov8.pt",
                  *,
+                 enable_yolo: bool = True,
                  low_conf_threshold: float = 0.40,
                  use_fallback: bool = True,
                  phash_templates: Dict[str, 'imagehash.ImageHash'] | None = None,
                  fallback_cnn: Optional[callable] = None,
                  phash_max_dist: int = 8):
         """card_yolov8.pt must be trained with class names like 'ah', 'ks', ..."""
-        self.model = YOLO(model_path)
+        self.model = None
+        if enable_yolo and YOLO is not None:
+            try:
+                self.model = YOLO(model_path)
+            except Exception as e:
+                print(f"CardDetector: YOLO disabled ({e})")
         self.low_conf_threshold = low_conf_threshold
         self.use_fallback       = use_fallback
         self.phash_templates    = phash_templates or {}
@@ -89,6 +98,8 @@ class CardDetector:
 
     def _detect_single_crop(self, crop: np.ndarray, *, zone: str) -> List[str]:
         if crop.size == 0:
+            return []
+        if self.model is None:
             return []
         results = self.model(crop, conf=0.25, verbose=False)
         boxes   = results[0].boxes
@@ -151,6 +162,8 @@ class CardDetector:
     def _draw_crop(self, img: np.ndarray, layout, zone: str, *, color):
         crop = self._crop(img, layout, zone)
         if crop.size == 0:
+            return
+        if self.model is None:
             return
         results = self.model(crop, conf=0.25, verbose=False)
         for xyxy, conf, cls in zip(results[0].boxes.xyxy.cpu().numpy(),

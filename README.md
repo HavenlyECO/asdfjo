@@ -9,7 +9,7 @@ This repository contains a full stack poker assistant that routes on-table infor
    pip install -r requirements.txt
    ```
 2. Copy `.env.template` to `.env` and fill in your OpenAI key and assistant IDs.
-3. Run the server:
+3. Run the server (set `ENABLE_YOLO=0` to disable card detection):
    ```bash
    python assistant_server.py
    ```
