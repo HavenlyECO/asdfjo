@@ -2,12 +2,16 @@ import os
 import time
 import re
 import io
+import hashlib
 from flask import Flask, request, jsonify, stream_with_context, Response
 from dotenv import load_dotenv
 from openai import OpenAI
 import logging
 import traceback
 from PIL import Image
+import cv2
+import numpy as np
+from game_state_builder import GameStateBuilder
 
 # --- Setup ---
 load_dotenv()
@@ -133,11 +137,20 @@ def route_image_decision():
         if 'screenshot' not in request.files:
             return jsonify({"error": "Missing screenshot file"}), 400
         img_file = request.files['screenshot']
-        image = Image.open(img_file.stream).convert("RGB")
+        img_bytes = img_file.read()
+        image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        frame_hash = hashlib.md5(img_bytes).hexdigest()
+        frame_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         
         # Extract game state from image
         game_state = extract_game_state_from_image(image)
         logger.info(f"Extracted game_state: {game_state}")
+
+        try:
+            json_path = GameStateBuilder.log_game_state(game_state, frame_hash=frame_hash)
+            GameStateBuilder.save_frame_image(frame_bgr, json_path)
+        except Exception as log_err:
+            logger.error(f"Game state logging failed: {log_err}")
 
         # Validate input early, return HTTP 400 for all user/data issues
         if not game_state or not isinstance(game_state, dict):
