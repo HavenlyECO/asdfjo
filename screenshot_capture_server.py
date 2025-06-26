@@ -1,6 +1,6 @@
 """
-Screenshot capture server for headless Ubuntu environments
-Uses scrot or imagemagick to capture X11 screen
+Clean screenshot capture server implementation
+Uses system tools for X11 screen capture
 """
 
 import os
@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from flask import Flask, request, send_file, jsonify, Response
+from flask import Flask, request, jsonify, Response
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -29,9 +29,8 @@ APP_PORT = int(os.environ.get("CAPTURE_SERVER_PORT", "5002"))
 APP_DEBUG = os.environ.get("FLASK_DEBUG", "false").lower() in ("true", "1", "yes")
 
 # Screenshot settings
-SAVE_SCREENSHOTS = os.environ.get("SAVE_SCREENSHOTS", "true").lower() in ("true", "1", "yes")
+SAVE_SCREENSHOTS = os.environ.get("SAVE_SCREENSHOTS", "false").lower() in ("true", "1", "yes")
 SCREENSHOT_DIR = Path(os.environ.get("SCREENSHOT_DIR", "captured_screenshots"))
-SCREENSHOT_TOOL = os.environ.get("SCREENSHOT_TOOL", "import").lower()  # "import" (imagemagick) or "scrot"
 
 # X11 display
 DISPLAY = os.environ.get("DISPLAY", ":0")
@@ -42,161 +41,154 @@ if SAVE_SCREENSHOTS:
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     logger.info(f"Screenshots will be saved to: {SCREENSHOT_DIR}")
 else:
-    logger.info("Screenshots will only be kept in memory")
+    logger.info("Screenshot saving is disabled")
 
 # Initialize Flask application
 app = Flask(__name__)
 
-# In-memory cache for latest screenshot
-latest_screenshot = None
-latest_screenshot_time = 0
-
-# --- Screenshot Functionality ---
-def check_tool_exists(tool_name):
-    """Check if a command-line tool exists"""
+# --- System tool checks ---
+def check_command(cmd):
+    """Check if a command exists on the system"""
     try:
         result = subprocess.run(
-            ["which", tool_name], 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE,
-            check=False
-        )
-        exists = result.returncode == 0
-        if exists:
-            logger.info(f"Found {tool_name} at {result.stdout.decode('utf-8').strip()}")
-        else:
-            logger.warning(f"{tool_name} not found")
-        return exists
-    except Exception as e:
-        logger.error(f"Error checking for {tool_name}: {e}")
-        return False
-
-def check_x11_running():
-    """Check if X11 is running"""
-    try:
-        result = subprocess.run(
-            ["xdpyinfo"], 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE,
-            env={"DISPLAY": DISPLAY},
-            check=False
-        )
-        running = result.returncode == 0
-        if running:
-            logger.info(f"X11 is running on {DISPLAY}")
-        else:
-            logger.warning(f"X11 is not running on {DISPLAY}: {result.stderr.decode('utf-8')}")
-        return running
-    except Exception as e:
-        logger.error(f"Error checking X11: {e}")
-        return False
-
-def capture_screenshot():
-    """Capture a screenshot using the selected tool"""
-    global latest_screenshot, latest_screenshot_time
-    
-    timestamp = time.strftime("%Y%m%d-%H%M%S-%f")
-    
-    if SAVE_SCREENSHOTS:
-        filename = f"capture_{timestamp}.png"
-        output_path = SCREENSHOT_DIR / filename
-    else:
-        # Create a temporary file if not saving
-        temp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        output_path = Path(temp_file.name)
-        temp_file.close()
-    
-    try:
-        if SCREENSHOT_TOOL == "scrot":
-            # Use scrot for screenshot
-            cmd = ["scrot", "-z", str(output_path)]
-        else:
-            # Default to imagemagick's import
-            cmd = ["import", "-window", "root", str(output_path)]
-        
-        # Capture the screenshot
-        env = os.environ.copy()
-        env["DISPLAY"] = DISPLAY
-        
-        result = subprocess.run(
-            cmd,
+            ["which", cmd],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            check=True
+            stderr=subprocess.PIPE
         )
+        return result.returncode == 0
+    except Exception as e:
+        logger.error(f"Error checking for command {cmd}: {e}")
+        return False
+
+# Check for available tools
+IMPORT_AVAILABLE = check_command("import")
+SCROT_AVAILABLE = check_command("scrot")
+XFCE4_SCREENSHOOTER_AVAILABLE = check_command("xfce4-screenshooter")
+GNOME_SCREENSHOT_AVAILABLE = check_command("gnome-screenshot")
+
+logger.info(f"Available screenshot tools:")
+logger.info(f"  ImageMagick import: {'✓' if IMPORT_AVAILABLE else '✗'}")
+logger.info(f"  scrot: {'✓' if SCROT_AVAILABLE else '✗'}")
+logger.info(f"  xfce4-screenshooter: {'✓' if XFCE4_SCREENSHOOTER_AVAILABLE else '✗'}")
+logger.info(f"  gnome-screenshot: {'✓' if GNOME_SCREENSHOT_AVAILABLE else '✗'}")
+
+# --- Screenshot Capture Function ---
+def capture_screenshot():
+    """
+    Capture a screenshot using available system tools
+    
+    Returns:
+        Tuple of (success, image_data or error_message)
+    """
+    # Create a temporary file
+    temp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    temp_path = temp_file.name
+    temp_file.close()
+    
+    # Set the environment with the correct display
+    env = os.environ.copy()
+    env["DISPLAY"] = DISPLAY
+    
+    result = None
+    error = None
+    command_used = None
+    
+    try:
+        # Try ImageMagick first
+        if IMPORT_AVAILABLE:
+            command_used = "import"
+            result = subprocess.run(
+                ["import", "-window", "root", temp_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                timeout=5
+            )
+        
+        # If import failed or not available, try scrot
+        elif SCROT_AVAILABLE:
+            command_used = "scrot"
+            result = subprocess.run(
+                ["scrot", "-z", temp_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                timeout=5
+            )
+        
+        # Try xfce4-screenshooter
+        elif XFCE4_SCREENSHOOTER_AVAILABLE:
+            command_used = "xfce4-screenshooter"
+            result = subprocess.run(
+                ["xfce4-screenshooter", "-f", "-s", temp_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                timeout=5
+            )
+        
+        # Try gnome-screenshot
+        elif GNOME_SCREENSHOT_AVAILABLE:
+            command_used = "gnome-screenshot"
+            result = subprocess.run(
+                ["gnome-screenshot", "-f", temp_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                timeout=5
+            )
+        else:
+            return False, "No screenshot tools available"
+        
+        # Check if the command was successful
+        if result.returncode != 0:
+            error_msg = f"{command_used} failed: {result.stderr.decode('utf-8')}"
+            logger.error(error_msg)
+            return False, error_msg
+        
+        # Check if the file was created
+        if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
+            error_msg = f"Screenshot file was not created with {command_used}"
+            logger.error(error_msg)
+            return False, error_msg
         
         # Read the file
-        with open(output_path, "rb") as f:
-            latest_screenshot = f.read()
+        with open(temp_path, "rb") as f:
+            image_data = f.read()
         
-        latest_screenshot_time = time.time()
+        # Save to permanent location if enabled
+        if SAVE_SCREENSHOTS:
+            timestamp = time.strftime("%Y%m%d-%H%M%S-%f")
+            save_path = SCREENSHOT_DIR / f"screenshot_{timestamp}.png"
+            
+            with open(save_path, "wb") as f:
+                f.write(image_data)
+            
+            logger.info(f"Screenshot saved to {save_path}")
         
-        # Delete temp file if not saving
-        if not SAVE_SCREENSHOTS:
-            output_path.unlink()
-        
-        logger.info(f"Screenshot captured at {timestamp}")
-        return latest_screenshot
+        logger.info(f"Screenshot captured successfully with {command_used}")
+        return True, image_data
     
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Screenshot capture failed: {e.stderr.decode('utf-8')}")
-        if not SAVE_SCREENSHOTS and output_path.exists():
-            output_path.unlink()
-        return None
+    except subprocess.TimeoutExpired:
+        error_msg = f"{command_used} timed out"
+        logger.error(error_msg)
+        return False, error_msg
     
     except Exception as e:
-        logger.error(f"Error capturing screenshot: {e}")
-        if not SAVE_SCREENSHOTS and output_path.exists():
-            output_path.unlink()
-        return None
-
-# --- System Setup Checks ---
-def setup_system():
-    """Set up system prerequisites"""
-    logger.info("Checking system requirements...")
+        error_msg = f"Error capturing screenshot: {str(e)}"
+        logger.error(error_msg)
+        return False, error_msg
     
-    # Check if X11 is running
-    x11_running = check_x11_running()
-    if not x11_running:
-        logger.warning(f"X11 is not running on {DISPLAY}")
-    
-    # Check for screenshot tools
-    scrot_exists = check_tool_exists("scrot")
-    import_exists = check_tool_exists("import")
-    
-    if not scrot_exists and not import_exists:
-        logger.error("No screenshot tools available. Please install imagemagick or scrot.")
-        return False
-    
-    # Set the tool to use
-    global SCREENSHOT_TOOL
-    if SCREENSHOT_TOOL == "scrot" and not scrot_exists:
-        if import_exists:
-            logger.warning("scrot not found, falling back to imagemagick import")
-            SCREENSHOT_TOOL = "import"
-        else:
-            logger.error("No screenshot tools available")
-            return False
-    elif SCREENSHOT_TOOL == "import" and not import_exists:
-        if scrot_exists:
-            logger.warning("imagemagick import not found, falling back to scrot")
-            SCREENSHOT_TOOL = "scrot"
-        else:
-            logger.error("No screenshot tools available")
-            return False
-    
-    logger.info(f"Using {SCREENSHOT_TOOL} for screenshots")
-    return True
-
-# Run setup
-setup_ok = setup_system()
-if not setup_ok:
-    logger.warning("System setup incomplete. Screenshot functionality may not work.")
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(temp_path)
+        except Exception as e:
+            logger.warning(f"Failed to delete temp file {temp_path}: {e}")
 
 # --- Helper Functions ---
 def add_cors_headers(response):
-    """Add CORS headers to enable cross-origin requests"""
+    """Add CORS headers to the response"""
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-API-Key'
@@ -204,39 +196,51 @@ def add_cors_headers(response):
 
 # --- API Endpoints ---
 @app.route("/api/capture", methods=["GET", "OPTIONS"])
-def capture():
-    """Get the latest screenshot"""
+def capture_endpoint():
+    """Endpoint for capturing screenshots"""
     # Handle preflight CORS requests
     if request.method == "OPTIONS":
         response = app.make_default_options_response()
         return add_cors_headers(response)
     
-    # Force capture new screenshot
-    screenshot_data = capture_screenshot()
+    # Capture screenshot
+    success, result = capture_screenshot()
     
-    # Check if capture failed
-    if screenshot_data is None:
-        return add_cors_headers(jsonify({"error": "Failed to capture screenshot"})), 500
-    
-    # Return the screenshot
-    response = Response(screenshot_data, mimetype="image/png")
-    return add_cors_headers(response)
+    if success:
+        # Return the image data
+        response = Response(result, mimetype="image/png")
+        return add_cors_headers(response)
+    else:
+        # Return the error message
+        error_response = jsonify({"error": result})
+        error_response.status_code = 500
+        return add_cors_headers(error_response)
 
 @app.route("/api/health", methods=["GET", "OPTIONS"])
 def health_check():
-    """Server health check endpoint"""
+    """Health check endpoint"""
     # Handle preflight CORS requests
     if request.method == "OPTIONS":
         response = app.make_default_options_response()
         return add_cors_headers(response)
     
+    # Check available tools
+    tools = []
+    if IMPORT_AVAILABLE:
+        tools.append("import")
+    if SCROT_AVAILABLE:
+        tools.append("scrot")
+    if XFCE4_SCREENSHOOTER_AVAILABLE:
+        tools.append("xfce4-screenshooter")
+    if GNOME_SCREENSHOT_AVAILABLE:
+        tools.append("gnome-screenshot")
+    
+    # Return server status
     response = jsonify({
         "status": "ok",
         "timestamp": time.time(),
-        "service": "screenshot-server",
         "display": DISPLAY,
-        "screenshot_tool": SCREENSHOT_TOOL,
-        "latest_screenshot_time": latest_screenshot_time,
+        "available_tools": tools,
         "save_screenshots": SAVE_SCREENSHOTS
     })
     
@@ -244,8 +248,8 @@ def health_check():
 
 @app.route("/", methods=["GET"])
 def index():
-    """Root endpoint with API information"""
-    html = """
+    """Root endpoint"""
+    return """
     <html>
         <head>
             <title>Screenshot Server</title>
@@ -253,32 +257,30 @@ def index():
                 body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
                 h1 { color: #333; }
                 .endpoint { background: #f4f4f4; padding: 10px; margin: 10px 0; border-radius: 4px; }
-                code { background: #eee; padding: 2px 4px; }
             </style>
         </head>
         <body>
-            <h1>Screenshot Server</h1>
-            <p>This server captures screenshots and serves them via API.</p>
+            <h1>Screenshot Capture Server</h1>
+            <p>This server captures screenshots from the X11 display and serves them via API.</p>
             
             <h2>Available endpoints:</h2>
             
             <div class="endpoint">
                 <h3>/api/capture</h3>
-                <p><strong>GET</strong>: Returns the latest screenshot</p>
+                <p>Captures a screenshot and returns it as a PNG image</p>
             </div>
             
             <div class="endpoint">
                 <h3>/api/health</h3>
-                <p>Server health check and status</p>
+                <p>Returns server health status information</p>
             </div>
         </body>
     </html>
     """
-    
-    return html
 
 # --- Main Entry Point ---
 if __name__ == "__main__":
     logger.info(f"Starting screenshot server on {APP_HOST}:{APP_PORT}")
+    logger.info(f"Using display: {DISPLAY}")
     logger.info(f"Debug mode: {APP_DEBUG}")
     app.run(host=APP_HOST, port=APP_PORT, debug=APP_DEBUG)
