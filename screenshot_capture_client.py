@@ -7,17 +7,28 @@ import time
 import threading
 import queue
 import requests
+from urllib.parse import urlparse
 from tkinter import Tk, Label, StringVar
 import pyttsx3
 from dotenv import load_dotenv
+
+
+def _normalize_capture_url(url: str) -> str:
+    """Ensure the capture URL includes the /api/capture path."""
+    if not url:
+        return "http://localhost:5002/api/capture"
+    parsed = urlparse(url)
+    if parsed.path in ("", "/"):
+        url = url.rstrip("/") + "/api/capture"
+    return url.rstrip("/")
 
 load_dotenv()
 
 
 # --- CONFIGURATION ---
 SERVER_URL = "http://24.199.98.206:5000/api/advice"
-CAPTURE_SERVER_URL = os.environ.get(
-    "CAPTURE_SERVER_URL", "http://localhost:5002/api/capture"
+CAPTURE_SERVER_URL = _normalize_capture_url(
+    os.environ.get("CAPTURE_SERVER_URL", "http://localhost:5002/api/capture")
 )
 API_KEY = "your-secure-api-key"
 TARGET_FPS = 32
