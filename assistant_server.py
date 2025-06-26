@@ -213,5 +213,6 @@ def route_image_decision():
         logger.error("Unexpected server error in /api/advice: %s\n%s", e, traceback.format_exc())
         return jsonify({"error": "Unexpected server error", "details": str(e)}), 500
 
+
 if __name__ == "__main__":
     app.run("0.0.0.0", 5000, debug=True)
