@@ -1,16 +1,15 @@
 """
-Screenshot capture server with headless implementation
-Captures screenshots on the server side and provides them via API
+Screenshot capture server for headless Ubuntu environments
+Uses scrot or imagemagick to capture X11 screen
 """
 
 import os
 import time
 import logging
-import io
 import subprocess
-import base64
+import tempfile
 from pathlib import Path
-from PIL import Image
+
 from flask import Flask, request, send_file, jsonify, Response
 from dotenv import load_dotenv
 
@@ -30,219 +29,176 @@ APP_PORT = int(os.environ.get("CAPTURE_SERVER_PORT", "5002"))
 APP_DEBUG = os.environ.get("FLASK_DEBUG", "false").lower() in ("true", "1", "yes")
 
 # Screenshot settings
-SAVE_SCREENSHOTS = os.environ.get("SAVE_SCREENSHOTS", "false").lower() in ("true", "1", "yes")
+SAVE_SCREENSHOTS = os.environ.get("SAVE_SCREENSHOTS", "true").lower() in ("true", "1", "yes")
 SCREENSHOT_DIR = Path(os.environ.get("SCREENSHOT_DIR", "captured_screenshots"))
-SCREENSHOT_INTERVAL = float(os.environ.get("SCREENSHOT_INTERVAL", "0.033"))  # ~30 FPS
+SCREENSHOT_TOOL = os.environ.get("SCREENSHOT_TOOL", "import").lower()  # "import" (imagemagick) or "scrot"
 
-# X11 settings for headless capture
+# X11 display
 DISPLAY = os.environ.get("DISPLAY", ":0")
-XVFB_RESOLUTION = os.environ.get("XVFB_RESOLUTION", "1920x1080x24")
+os.environ["DISPLAY"] = DISPLAY
 
-# Create screenshot directory if saving is enabled
+# Create screenshot directory
 if SAVE_SCREENSHOTS:
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     logger.info(f"Screenshots will be saved to: {SCREENSHOT_DIR}")
 else:
-    logger.info("Screenshot saving is disabled")
+    logger.info("Screenshots will only be kept in memory")
 
 # Initialize Flask application
 app = Flask(__name__)
 
-# Initialize X11 display for headless operation if needed
-def setup_virtual_display():
-    """Set up virtual display if needed"""
-    if os.environ.get("USE_XVFB", "false").lower() in ("true", "1", "yes"):
-        try:
-            # Check if Xvfb is already running
-            result = subprocess.run(
-                ["pgrep", "Xvfb"], 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.PIPE
-            )
-            
-            if result.returncode != 0:
-                # Start Xvfb
-                subprocess.Popen(
-                    ["Xvfb", ":1", "-screen", "0", XVFB_RESOLUTION],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                os.environ["DISPLAY"] = ":1"
-                logger.info("Started Xvfb virtual display")
-            else:
-                logger.info("Xvfb is already running")
-        except Exception as e:
-            logger.error(f"Failed to start Xvfb: {e}")
+# In-memory cache for latest screenshot
+latest_screenshot = None
+latest_screenshot_time = 0
+
+# --- Screenshot Functionality ---
+def check_tool_exists(tool_name):
+    """Check if a command-line tool exists"""
+    try:
+        result = subprocess.run(
+            ["which", tool_name], 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            check=False
+        )
+        exists = result.returncode == 0
+        if exists:
+            logger.info(f"Found {tool_name} at {result.stdout.decode('utf-8').strip()}")
+        else:
+            logger.warning(f"{tool_name} not found")
+        return exists
+    except Exception as e:
+        logger.error(f"Error checking for {tool_name}: {e}")
+        return False
+
+def check_x11_running():
+    """Check if X11 is running"""
+    try:
+        result = subprocess.run(
+            ["xdpyinfo"], 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            env={"DISPLAY": DISPLAY},
+            check=False
+        )
+        running = result.returncode == 0
+        if running:
+            logger.info(f"X11 is running on {DISPLAY}")
+        else:
+            logger.warning(f"X11 is not running on {DISPLAY}: {result.stderr.decode('utf-8')}")
+        return running
+    except Exception as e:
+        logger.error(f"Error checking X11: {e}")
+        return False
+
+def capture_screenshot():
+    """Capture a screenshot using the selected tool"""
+    global latest_screenshot, latest_screenshot_time
+    
+    timestamp = time.strftime("%Y%m%d-%H%M%S-%f")
+    
+    if SAVE_SCREENSHOTS:
+        filename = f"capture_{timestamp}.png"
+        output_path = SCREENSHOT_DIR / filename
     else:
-        # Use the specified DISPLAY
-        os.environ["DISPLAY"] = DISPLAY
-        logger.info(f"Using display: {DISPLAY}")
-
-# Set up virtual display
-setup_virtual_display()
-
-# --- Screenshot Capture ---
-class ScreenCapture:
-    """Screen capture implementation for headless server"""
+        # Create a temporary file if not saving
+        temp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        output_path = Path(temp_file.name)
+        temp_file.close()
     
-    def __init__(self):
-        """Initialize screen capture"""
-        # Import here to avoid errors if X is not available during module load
-        import gi
-        gi.require_version('Gdk', '3.0')
-        from gi.repository import Gdk
+    try:
+        if SCREENSHOT_TOOL == "scrot":
+            # Use scrot for screenshot
+            cmd = ["scrot", "-z", str(output_path)]
+        else:
+            # Default to imagemagick's import
+            cmd = ["import", "-window", "root", str(output_path)]
         
-        self.Gdk = Gdk
+        # Capture the screenshot
+        env = os.environ.copy()
+        env["DISPLAY"] = DISPLAY
         
-        # Get the display
-        self.display = Gdk.Display.get_default()
-        if not self.display:
-            logger.error("No display found")
-            raise RuntimeError("No display found")
-            
-        # Get the default screen
-        self.screen = self.display.get_default_screen()
-        if not self.screen:
-            logger.error("No screen found")
-            raise RuntimeError("No screen found")
-            
-        # Log screen information
-        logger.info(f"Display: {self.display.get_name()}")
-        width = self.screen.get_width()
-        height = self.screen.get_height()
-        logger.info(f"Screen dimensions: {width}x{height}")
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            check=True
+        )
         
-        # Latest screenshot data
-        self.latest_screenshot = None
-        self.latest_timestamp = 0
+        # Read the file
+        with open(output_path, "rb") as f:
+            latest_screenshot = f.read()
         
-        # Background capture thread
-        self.capture_thread = None
-        self.running = False
-        self.shutdown = False
+        latest_screenshot_time = time.time()
         
-    def start_capture_thread(self):
-        """Start background capture thread"""
-        import threading
+        # Delete temp file if not saving
+        if not SAVE_SCREENSHOTS:
+            output_path.unlink()
         
-        if self.running:
-            return
-            
-        self.running = True
-        self.shutdown = False
-        self.capture_thread = threading.Thread(target=self._capture_worker)
-        self.capture_thread.daemon = True
-        self.capture_thread.start()
-        logger.info("Started capture thread")
-        
-    def _capture_worker(self):
-        """Background worker for continuous capture"""
-        while not self.shutdown:
-            try:
-                # Capture the screen
-                start_time = time.time()
-                self.capture_screenshot()
-                
-                # Maintain frame rate
-                elapsed = time.time() - start_time
-                delay = max(0, SCREENSHOT_INTERVAL - elapsed)
-                if delay > 0:
-                    time.sleep(delay)
-                
-            except Exception as e:
-                logger.error(f"Error in capture worker: {e}")
-                time.sleep(1.0)  # Error backoff
-        
-        self.running = False
-        
-    def capture_screenshot(self):
-        """Capture a screenshot"""
-        try:
-            # Take screenshot of the root window
-            root_window = self.Gdk.get_default_root_window()
-            if not root_window:
-                logger.error("No root window")
-                return None
-                
-            # Get window dimensions
-            width = root_window.get_width()
-            height = root_window.get_height()
-            
-            # Create pixbuf
-            pixbuf = self.Gdk.pixbuf_get_from_window(root_window, 0, 0, width, height)
-            if not pixbuf:
-                logger.error("Failed to create pixbuf")
-                return None
-                
-            # Convert to PNG bytes
-            png_data = None
-            success, png_data = pixbuf.save_to_bufferv("png", [], [])
-            
-            if not success or not png_data:
-                logger.error("Failed to convert to PNG")
-                return None
-                
-            # Update the latest screenshot
-            self.latest_screenshot = png_data
-            self.latest_timestamp = time.time()
-            
-            # Save to disk if enabled
-            if SAVE_SCREENSHOTS:
-                timestamp = time.strftime("%Y%m%d-%H%M%S-%f")
-                filename = f"capture_{timestamp}.png"
-                filepath = SCREENSHOT_DIR / filename
-                
-                # Save directly from pixbuf
-                pixbuf.savev(str(filepath), "png", [], [])
-                logger.info(f"Saved screenshot to {filepath}")
-            
-            return png_data
-            
-        except Exception as e:
-            logger.error(f"Screenshot capture error: {e}")
-            return None
+        logger.info(f"Screenshot captured at {timestamp}")
+        return latest_screenshot
     
-    def get_latest_screenshot(self):
-        """Get the latest screenshot"""
-        return self.latest_screenshot, self.latest_timestamp
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Screenshot capture failed: {e.stderr.decode('utf-8')}")
+        if not SAVE_SCREENSHOTS and output_path.exists():
+            output_path.unlink()
+        return None
     
-    def stop(self):
-        """Stop the capture thread"""
-        self.shutdown = True
+    except Exception as e:
+        logger.error(f"Error capturing screenshot: {e}")
+        if not SAVE_SCREENSHOTS and output_path.exists():
+            output_path.unlink()
+        return None
 
-# Initialize screen capture with some delay to ensure display is ready
-screen_capture = None
-
-def init_screen_capture():
-    """Initialize screen capture with retry"""
-    global screen_capture
+# --- System Setup Checks ---
+def setup_system():
+    """Set up system prerequisites"""
+    logger.info("Checking system requirements...")
     
-    if screen_capture:
-        return True
-        
-    max_attempts = 5
-    for attempt in range(max_attempts):
-        try:
-            screen_capture = ScreenCapture()
-            screen_capture.start_capture_thread()
-            return True
-        except Exception as e:
-            logger.error(f"Failed to initialize screen capture (attempt {attempt+1}/{max_attempts}): {e}")
-            if attempt < max_attempts - 1:
-                time.sleep(2)
+    # Check if X11 is running
+    x11_running = check_x11_running()
+    if not x11_running:
+        logger.warning(f"X11 is not running on {DISPLAY}")
     
-    return False
+    # Check for screenshot tools
+    scrot_exists = check_tool_exists("scrot")
+    import_exists = check_tool_exists("import")
+    
+    if not scrot_exists and not import_exists:
+        logger.error("No screenshot tools available. Please install imagemagick or scrot.")
+        return False
+    
+    # Set the tool to use
+    global SCREENSHOT_TOOL
+    if SCREENSHOT_TOOL == "scrot" and not scrot_exists:
+        if import_exists:
+            logger.warning("scrot not found, falling back to imagemagick import")
+            SCREENSHOT_TOOL = "import"
+        else:
+            logger.error("No screenshot tools available")
+            return False
+    elif SCREENSHOT_TOOL == "import" and not import_exists:
+        if scrot_exists:
+            logger.warning("imagemagick import not found, falling back to scrot")
+            SCREENSHOT_TOOL = "scrot"
+        else:
+            logger.error("No screenshot tools available")
+            return False
+    
+    logger.info(f"Using {SCREENSHOT_TOOL} for screenshots")
+    return True
 
-# Try to initialize screen capture
-init_success = init_screen_capture()
-if not init_success:
-    logger.warning("Failed to initialize screen capture, will retry on first request")
+# Run setup
+setup_ok = setup_system()
+if not setup_ok:
+    logger.warning("System setup incomplete. Screenshot functionality may not work.")
 
 # --- Helper Functions ---
 def add_cors_headers(response):
     """Add CORS headers to enable cross-origin requests"""
     response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-API-Key'
     return response
 
@@ -250,27 +206,17 @@ def add_cors_headers(response):
 @app.route("/api/capture", methods=["GET", "OPTIONS"])
 def capture():
     """Get the latest screenshot"""
-    global screen_capture
-    
     # Handle preflight CORS requests
     if request.method == "OPTIONS":
         response = app.make_default_options_response()
         return add_cors_headers(response)
     
-    # Initialize screen capture if needed
-    if not screen_capture:
-        if not init_screen_capture():
-            return add_cors_headers(jsonify({"error": "Failed to initialize screen capture"})), 500
+    # Force capture new screenshot
+    screenshot_data = capture_screenshot()
     
-    # Get the latest screenshot
-    screenshot_data, timestamp = screen_capture.get_latest_screenshot()
-    
-    # If no screenshot available yet, try to capture one directly
-    if not screenshot_data:
-        screenshot_data = screen_capture.capture_screenshot()
-        
-    if not screenshot_data:
-        return add_cors_headers(jsonify({"error": "No screenshot available"})), 404
+    # Check if capture failed
+    if screenshot_data is None:
+        return add_cors_headers(jsonify({"error": "Failed to capture screenshot"})), 500
     
     # Return the screenshot
     response = Response(screenshot_data, mimetype="image/png")
@@ -279,28 +225,18 @@ def capture():
 @app.route("/api/health", methods=["GET", "OPTIONS"])
 def health_check():
     """Server health check endpoint"""
-    global screen_capture
-    
     # Handle preflight CORS requests
     if request.method == "OPTIONS":
         response = app.make_default_options_response()
         return add_cors_headers(response)
     
-    # Check screen capture status
-    capture_status = "ok" if screen_capture else "not_initialized"
-    
-    if screen_capture:
-        _, timestamp = screen_capture.get_latest_screenshot()
-        latest_time = timestamp
-    else:
-        latest_time = None
-        
     response = jsonify({
         "status": "ok",
         "timestamp": time.time(),
         "service": "screenshot-server",
-        "capture_status": capture_status,
-        "latest_screenshot_time": latest_time,
+        "display": DISPLAY,
+        "screenshot_tool": SCREENSHOT_TOOL,
+        "latest_screenshot_time": latest_screenshot_time,
         "save_screenshots": SAVE_SCREENSHOTS
     })
     
@@ -340,18 +276,6 @@ def index():
     """
     
     return html
-
-# --- Cleanup on exit ---
-import atexit
-
-@atexit.register
-def cleanup():
-    """Clean up resources on exit"""
-    global screen_capture
-    
-    if screen_capture:
-        logger.info("Stopping screen capture thread")
-        screen_capture.stop()
 
 # --- Main Entry Point ---
 if __name__ == "__main__":
