@@ -24,14 +24,14 @@ This repository contains a full stack poker assistant that routes on-table infor
 
 ## Command Line Utilities
 
-The repository contains several standalone scripts that can be invoked directly:
-
 - `python assistant_server.py` – start the Flask API server. When running,
   every request saves a `logs/game_states/` snapshot (JSON + PNG) that can later
   be used with `train_card_yolo.py`. The server logs the exact paths so you can
   verify screenshots are being written. The `/api/advice` endpoint accepts
   either a screenshot file or a raw JSON game state.
 - `python local_client.py` – capture the table region and show overlay advice.
+- `python screenshot_server.py` – minimal server that stores uploaded screenshots.
+- `python screenshot_saver.py` – continuously capture screenshots and upload them to the screenshot server.
 - `python post_game_state.py` – send a sample JSON game state to the server.
 - `python realtime_pipeline.py` – run the demo multithreaded OCR pipeline.
 - `python gto_proxy.py --train solver_data.json --out gto_proxy_model.pkl` – train the GTO decision tree model.
