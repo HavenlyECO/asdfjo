@@ -32,6 +32,8 @@ This repository contains a full stack poker assistant that routes on-table infor
 - `python local_client.py` – capture the table region and show overlay advice.
 - `python screenshot_server.py` – minimal server that stores uploaded screenshots.
 - `python screenshot_saver.py` – continuously capture screenshots and upload them to the screenshot server.
+- `python screenshot_capture_server.py` – serve on-demand screenshots to remote clients.
+- `python screenshot_capture_client.py` – fetch screenshots from the capture server and display advice.
 - `python post_game_state.py` – send a sample JSON game state to the server.
 - `python realtime_pipeline.py` – run the demo multithreaded OCR pipeline.
 - `python gto_proxy.py --train solver_data.json --out gto_proxy_model.pkl` – train the GTO decision tree model.
@@ -51,6 +53,8 @@ See `setup_guide.md` for detailed configuration instructions.
 
 - `assistant_server.py` – Flask API that streams advice from OpenAI.
 - `local_client.py` – screenshot client with Tk overlay and optional TTS.
+- `screenshot_capture_server.py` – Flask server that provides captured screenshots.
+- `screenshot_capture_client.py` – thin client that relies on the capture server.
 - `decision_engine.py` – combines solver output, LLM responses, equity calcs, and ICM logic.
 - `gto_proxy.py` – fast decision tree proxy with optional pre-flop chart.
 - `hero_turn_detector.py` – determines when it's your turn to act using screen cues.
