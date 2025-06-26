@@ -2,17 +2,23 @@
 forwards them to the main assistant server."""
 
 import io
+import os
 import time
 import threading
 import queue
 import requests
 from tkinter import Tk, Label, StringVar
 import pyttsx3
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 # --- CONFIGURATION ---
 SERVER_URL = "http://24.199.98.206:5000/api/advice"
-CAPTURE_SERVER_URL = "http://localhost:5002/api/capture"
+CAPTURE_SERVER_URL = os.environ.get(
+    "CAPTURE_SERVER_URL", "http://localhost:5002/api/capture"
+)
 API_KEY = "your-secure-api-key"
 TARGET_FPS = 32
 GUI_UPDATE_INTERVAL = 0.1
@@ -95,9 +101,13 @@ class OverlayWindow:
 # --- Screenshot Handling ---
 def capture_frame() -> bytes:
     """Request a screenshot from `screenshot_capture_server.py`."""
-    resp = requests.get(CAPTURE_SERVER_URL, timeout=5)
-    resp.raise_for_status()
-    return resp.content
+    try:
+        resp = requests.get(CAPTURE_SERVER_URL, timeout=5)
+        resp.raise_for_status()
+        return resp.content
+    except requests.RequestException as e:
+        print(f"Capture error: {e}")
+        return None
 
 
 def send_frame(img_bytes: bytes):
@@ -123,7 +133,10 @@ def main_loop(overlay: OverlayWindow):
         while True:
             start = time.time()
             img_bytes = capture_frame()
-            suggestion, _ = send_frame(img_bytes)
+            if img_bytes is not None:
+                suggestion, _ = send_frame(img_bytes)
+            else:
+                suggestion = "Capture server unavailable"
             with suggestion_lock:
                 last_suggestion = suggestion
             if ENABLE_TTS:
