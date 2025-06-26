@@ -11,6 +11,7 @@ import requests
 import mss
 from tkinter import Tk, Label, StringVar
 import pyttsx3
+import os
 
 # --- CONFIGURATION ---
 SERVER_URL = "http://24.199.98.206:5000/api/advice" 
@@ -85,6 +86,8 @@ class OverlayWindow:
 
 # --- Screenshot and Network ---
 def capture_frame():
+    if os.name == "posix" and "DISPLAY" not in os.environ:
+        os.environ["DISPLAY"] = ":0"
     with mss.mss() as sct:
         return sct.grab(CAPTURE_REGION)
 
