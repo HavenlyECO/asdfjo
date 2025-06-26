@@ -6,10 +6,14 @@ import logging
 import io
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from flask import Flask, send_file, jsonify
 import mss
 
 from local_client import capture_frame
+
+load_dotenv()
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
