@@ -25,4 +25,6 @@ pytesseract
 pyttsx3
 PyQt5
 keyboard
+# Virtual display for headless screenshot capture
+pyvirtualdisplay
 # tkinter comes with standard Python but may require system packages

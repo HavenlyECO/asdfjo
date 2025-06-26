@@ -12,6 +12,12 @@ import mss
 from tkinter import Tk, Label, StringVar
 import pyttsx3
 import os
+try:
+    from pyvirtualdisplay import Display
+except ImportError:  # pyvirtualdisplay optional; handled dynamically
+    Display = None
+
+_virtual_display = None
 
 # --- CONFIGURATION ---
 SERVER_URL = "http://24.199.98.206:5000/api/advice" 
@@ -85,9 +91,20 @@ class OverlayWindow:
         self.root.withdraw()
 
 # --- Screenshot and Network ---
-def capture_frame():
+def _ensure_display():
+    """Start a virtual display if needed."""
+    global _virtual_display
     if os.name == "posix" and "DISPLAY" not in os.environ:
-        os.environ["DISPLAY"] = ":0"
+        if Display is not None:
+            _virtual_display = Display(visible=0, size=(1024, 768))
+            _virtual_display.start()
+            os.environ["DISPLAY"] = f":{_virtual_display.display}"
+        else:
+            os.environ["DISPLAY"] = ":0"
+
+
+def capture_frame():
+    _ensure_display()
     with mss.mss() as sct:
         return sct.grab(CAPTURE_REGION)
 
@@ -131,12 +148,14 @@ def main_loop(overlay):
 
 # --- Cleanup Function ---
 def cleanup():
-    global speech_running, speech_queue
+    global speech_running, speech_queue, _virtual_display
     speech_running = False
     if speech_queue:
         speech_queue.put(None)
     if speech_thread and speech_thread.is_alive():
         speech_thread.join(timeout=0.5)
+    if _virtual_display is not None:
+        _virtual_display.stop()
 
 if __name__ == "__main__":
     try:
