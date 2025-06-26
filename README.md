@@ -34,7 +34,7 @@ This repository contains a full stack poker assistant that routes on-table infor
 - `python screenshot_saver.py` – continuously capture screenshots and upload them to the screenshot server.
 - `python screenshot_capture_server.py` – serve on-demand screenshots to remote clients. Set `CAPTURE_SERVER_PORT` if a different port is required.
 - `python screenshot_capture_client.py` – fetch screenshots from the capture server and display advice.
-  The client loads environment variables (e.g., from a `.env` file); set `CAPTURE_SERVER_URL` to the capture server's host and port.
+  The client loads environment variables (e.g., from a `.env` file); set `CAPTURE_SERVER_URL` to the capture server's full URL (e.g., `http://<host>:5002/api/capture`).
 - `python post_game_state.py` – send a sample JSON game state to the server.
 - `python realtime_pipeline.py` – run the demo multithreaded OCR pipeline.
 - `python gto_proxy.py --train solver_data.json --out gto_proxy_model.pkl` – train the GTO decision tree model.
