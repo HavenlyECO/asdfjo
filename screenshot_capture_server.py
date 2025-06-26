@@ -1,6 +1,7 @@
 """
-Clean screenshot capture server implementation
+Screenshot capture server for headless environments
 Uses system tools for X11 screen capture
+No fallbacks or bandage code - clean implementation
 """
 
 import os
@@ -29,7 +30,7 @@ APP_PORT = int(os.environ.get("CAPTURE_SERVER_PORT", "5002"))
 APP_DEBUG = os.environ.get("FLASK_DEBUG", "false").lower() in ("true", "1", "yes")
 
 # Screenshot settings
-SAVE_SCREENSHOTS = os.environ.get("SAVE_SCREENSHOTS", "false").lower() in ("true", "1", "yes")
+SAVE_SCREENSHOTS = True  # Always save screenshots to disk
 SCREENSHOT_DIR = Path(os.environ.get("SCREENSHOT_DIR", "captured_screenshots"))
 
 # X11 display
@@ -37,11 +38,8 @@ DISPLAY = os.environ.get("DISPLAY", ":0")
 os.environ["DISPLAY"] = DISPLAY
 
 # Create screenshot directory
-if SAVE_SCREENSHOTS:
-    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Screenshots will be saved to: {SCREENSHOT_DIR}")
-else:
-    logger.info("Screenshot saving is disabled")
+SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+logger.info(f"Screenshots will be saved to: {SCREENSHOT_DIR}")
 
 # Initialize Flask application
 app = Flask(__name__)
@@ -80,10 +78,11 @@ def capture_screenshot():
     Returns:
         Tuple of (success, image_data or error_message)
     """
-    # Create a temporary file
-    temp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    temp_path = temp_file.name
-    temp_file.close()
+    # Generate a timestamp-based filename
+    timestamp = time.strftime("%Y%m%d-%H%M%S-%f")
+    
+    # Create the output path
+    output_path = SCREENSHOT_DIR / f"screenshot_{timestamp}.png"
     
     # Set the environment with the correct display
     env = os.environ.copy()
@@ -98,7 +97,7 @@ def capture_screenshot():
         if IMPORT_AVAILABLE:
             command_used = "import"
             result = subprocess.run(
-                ["import", "-window", "root", temp_path],
+                ["import", "-window", "root", str(output_path)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
@@ -109,7 +108,7 @@ def capture_screenshot():
         elif SCROT_AVAILABLE:
             command_used = "scrot"
             result = subprocess.run(
-                ["scrot", "-z", temp_path],
+                ["scrot", "-z", str(output_path)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
@@ -120,7 +119,7 @@ def capture_screenshot():
         elif XFCE4_SCREENSHOOTER_AVAILABLE:
             command_used = "xfce4-screenshooter"
             result = subprocess.run(
-                ["xfce4-screenshooter", "-f", "-s", temp_path],
+                ["xfce4-screenshooter", "-f", "-s", str(output_path)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
@@ -131,7 +130,7 @@ def capture_screenshot():
         elif GNOME_SCREENSHOT_AVAILABLE:
             command_used = "gnome-screenshot"
             result = subprocess.run(
-                ["gnome-screenshot", "-f", temp_path],
+                ["gnome-screenshot", "-f", str(output_path)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
@@ -147,24 +146,14 @@ def capture_screenshot():
             return False, error_msg
         
         # Check if the file was created
-        if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
             error_msg = f"Screenshot file was not created with {command_used}"
             logger.error(error_msg)
             return False, error_msg
         
         # Read the file
-        with open(temp_path, "rb") as f:
+        with open(output_path, "rb") as f:
             image_data = f.read()
-        
-        # Save to permanent location if enabled
-        if SAVE_SCREENSHOTS:
-            timestamp = time.strftime("%Y%m%d-%H%M%S-%f")
-            save_path = SCREENSHOT_DIR / f"screenshot_{timestamp}.png"
-            
-            with open(save_path, "wb") as f:
-                f.write(image_data)
-            
-            logger.info(f"Screenshot saved to {save_path}")
         
         logger.info(f"Screenshot captured successfully with {command_used}")
         return True, image_data
@@ -178,13 +167,6 @@ def capture_screenshot():
         error_msg = f"Error capturing screenshot: {str(e)}"
         logger.error(error_msg)
         return False, error_msg
-    
-    finally:
-        # Clean up temp file
-        try:
-            os.unlink(temp_path)
-        except Exception as e:
-            logger.warning(f"Failed to delete temp file {temp_path}: {e}")
 
 # --- Helper Functions ---
 def add_cors_headers(response):
