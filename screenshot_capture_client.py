@@ -74,7 +74,7 @@ class OverlayWindow:
             pady=10,
         )
         self.label.pack()
-        self.var.set("Waiting for advice...")
+        self.var.set("Connecting to server...")
         self.last_update = 0
 
     def set_text(self, txt: str):
@@ -115,7 +115,7 @@ def send_frame(img_bytes: bytes):
 
 # --- Main Loop ---
 def main_loop(overlay: OverlayWindow):
-    last_suggestion = "Waiting for advice..."
+    last_suggestion = "Connecting to server..."
     suggestion_lock = threading.Lock()
 
     def network_worker():
